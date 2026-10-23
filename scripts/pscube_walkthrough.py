@@ -17,11 +17,13 @@ VS Code では「実行とデバッグ」から「P's CUBE 台詳細までの確
 from __future__ import annotations
 
 import argparse
+import contextlib
 import time
 from datetime import datetime
 from pathlib import Path
 
 from playwright.sync_api import FrameLocator, Page, sync_playwright
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 PTOWN = "https://p-town.dmm.com/shops/kanagawa/13152/jackpot"
 PSCUBE = "https://www.pscube.jp/dedamajyoho-P-townDMMpachi/c743201/"
@@ -60,7 +62,9 @@ class Walkthrough:
     def loaded(self, name: str, ready_selector: str | None = None) -> None:
         if ready_selector:
             self.view.locator(ready_selector).first.wait_for(timeout=60_000)
-        self.page.wait_for_load_state("networkidle")
+        # ぱちタウンは広告・計測の通信が続き networkidle にならないことがあるため、上限を設けて先へ進む
+        with contextlib.suppress(PlaywrightTimeoutError):
+            self.page.wait_for_load_state("networkidle", timeout=10_000)
         self.last_nav = time.monotonic()
         shot = self.out / f"{self.step_no:02d}_{name}.png"
         self.page.screenshot(path=str(shot), full_page=True)
