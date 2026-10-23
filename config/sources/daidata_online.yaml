@@ -1,0 +1,23 @@
+code: daidata_online
+name: "台データオンライン"
+priority: 20
+enabled: true
+access_policy:
+  # robots.txt と利用規約に抵触するため prohibited。運営者の許可（データ提供契約等）を得た場合のみ変更する。
+  automated_fetch: prohibited
+  reviewed_at: "2026-10-21"
+  evidence:
+    - "https://daidata.goraggio.com/robots.txt: User-agent: * に対し /9* /*/1* /*/2* /*/9* を Disallow"
+    - "https://daidata.goraggio.com/agreement 第4条10号 データベース等の複製を禁止"
+    - "同 第4条11号・第13条2項 取得した情報の第三者への開示・提供を禁止"
+  permission_reference: null
+  respect_robots_txt: true
+rate_limit:
+  min_interval_seconds: 10
+  max_concurrency: 1
+retry:
+  max_attempts: 3
+  base_delay_seconds: 5
+  max_delay_seconds: 120
+  timeout_seconds: 30
+user_agent: "slot-data-collector/0.1 (+contact: set-in-config)"

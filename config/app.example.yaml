@@ -1,0 +1,22 @@
+# slot-data 運用設定の例。config/app.yaml にコピーして編集する（app.yaml は git 管理外）。
+# 秘密情報（DB パスワード等）はここに書かず、環境変数 SLOT_DATA_DATABASE_URL 等で渡す。
+#
+# 取得元の定義は config/sources/*.yaml から読み込まれる（ここで同じ code を定義すると上書き）。
+
+# 自動収集の対象（取得元が access_policy.automated_fetch: permitted のときだけ実行される）
+targets:
+  - source: pscube
+    hall_code: H001
+    source_hall_id: "REPLACE_ME"
+    machines: null  # null = 全台
+
+selection:
+  # final_candidate の値が同一取得元で何時間変化しなければ final とみなすか
+  settle_hours: 24
+
+quality:
+  # 日次として不自然とみなす絶対値上限（警告のみ）。省略時は domain/metrics.py の既定値
+  warn_abs_limits: {}
+
+# schedule コマンドの実行間隔（分）
+schedule_interval_minutes: 60

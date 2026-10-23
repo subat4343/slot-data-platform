@@ -1,0 +1,24 @@
+code: pscube
+name: "P's CUBE"
+priority: 10
+enabled: true
+access_policy:
+  # 約款で自動取得が禁止されているため prohibited。運営者の明示的許可を得た場合のみ
+  # permitted に変更し、permission_reference に許可の根拠（契約番号・書面の所在等）を記録する。
+  automated_fetch: prohibited
+  reviewed_at: "2026-10-21"
+  evidence:
+    - "https://www.pscube.jp/docs/yakkan/ 第5条(1) 明示的な許可なく自動化された手段で情報を取得することを禁止"
+    - "同 第5条(2) HTML データを取得して特定トピックのデータを抽出・整形しなおすことを禁止"
+    - "同 第5条(3)(4) 二次利用・転載、特定店舗の情報作成と第三者開示を禁止"
+  permission_reference: null
+  respect_robots_txt: true
+rate_limit:
+  min_interval_seconds: 10
+  max_concurrency: 1
+retry:
+  max_attempts: 3
+  base_delay_seconds: 5
+  max_delay_seconds: 120
+  timeout_seconds: 30
+user_agent: "slot-data-collector/0.1 (+contact: set-in-config)"

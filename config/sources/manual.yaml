@@ -1,0 +1,9 @@
+# 人が記録したファイルの取り込み（import-observations）。自動取得は行わない。
+code: manual
+name: "手動入力"
+priority: 50
+enabled: true
+access_policy:
+  automated_fetch: prohibited
+  evidence:
+    - "手動インポート専用の取得元"
