@@ -1,0 +1,7 @@
+hall_code,layout_valid_from,island_code,side,sequence_no,machine_number,position_kind,notes
+H001,2026-10-01,A,LEFT,1,301,,
+H001,2026-10-01,A,LEFT,2,302,,
+H001,2026-10-01,A,LEFT,3,303,,
+H001,2026-10-01,A,RIGHT,1,311,,
+H001,2026-10-01,A,RIGHT,2,,empty,空き台枠
+H001,2026-10-01,A,RIGHT,3,313,,

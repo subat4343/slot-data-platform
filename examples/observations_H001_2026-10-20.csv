@@ -1,0 +1,4 @@
+machine_number,model_name,business_date,observed_at,total_games,net_medals,bb_count,rb_count,at_count,source_state
+301,サンプル機種A,2026-10-20,2026-10-20T23:20:00+09:00,"6,130","+1,470",21,14,#not_applicable,closed
+302,サンプル機種A,2026-10-20,2026-10-20T23:20:00+09:00,0,0,0,0,,closed
+303,サンプル機種B,2026-10-20,2026-10-20T23:20:00+09:00,"4,410",-980,-,-,3,closed

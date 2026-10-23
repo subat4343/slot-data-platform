@@ -1,0 +1,58 @@
+# 実装計画と進捗（Phase 0〜6）
+
+状態: ✅ 完了 / 🟡 一部完了（ブロッカーあり）/ ⬜ 未着手。最終更新 2026-10-21。
+
+```mermaid
+flowchart LR
+    P0[Phase 0 設計] --> P1[Phase 1 DB基盤]
+    P1 --> P2[Phase 2 原本・正規化・改訂]
+    P2 --> P3[Phase 3 全履歴]
+    P1 --> P4[Phase 4 配置管理]
+    P2 --> P5[Phase 5 サイトアダプター]
+    P3 --> P6[Phase 6 運用・出力]
+    P4 --> P6
+    P5 -.許可待ち.-> P6
+```
+
+| Phase | 状態 | タスク | 完了基準 | 成果物 |
+|---|---|---|---|---|
+| 0 設計レビュー | ✅ | 整合性レビュー、ER 図、テーブル定義、有効期間の定義、収集元契約、ADR、データフロー、計画 | 指摘の解消方法または未決定事項として記録 | `spec_review.md` `erd.md` `schema_dictionary.md` `architecture.md` `source_contracts.md` `decisions/` |
+| 1 DB 基盤 | ✅ | ORM 26 テーブル、初期マイグレーション（btree_gist・排他制約・トリガー）、テスト DB | upgrade → downgrade → upgrade が通る、`alembic check` で差分 0、制約テストが通る | `models/` `alembic/` `tests/integration/test_constraints.py` |
+| 2 原本・正規化・改訂 | ✅ | 原本ストア、raw_payloads、解析版管理、観測追記、検証、採用値更新、改訂、冪等性、並行制御 | 再投入・複数回取得・訂正・不一致・再解析・並列のテストが通る | `storage/` `ingestion/` `normalization/` `reconciliation/` `tests/integration/test_pipeline.py` |
+| 3 全履歴 | ✅ | 当たり履歴系列、スランプ全点（点数無制限・バッチ挿入）、推定系列、営業中スナップショット | 12,346 点の全点保持、旧系列の保持、順序訂正の検出 | `normalization/persist.py` |
+| 4 配置管理 | ✅ | CSV/Excel 取り込み、検証、差分プレビュー、公開、位置関係・角台、手動補正、過去日の配置再現 | 版の切り替え・台番号変更・過去日の再現・不正 CSV 非反映のテストが通る | `layout/` `tests/integration/test_layout.py` `tests/unit/test_geometry.py` |
+| 5 サイトアダプター | 🟡 | 利用条件の実地確認 ✅、許可ゲート ✅、HTTP 基盤（robots・レート・バックオフ・分類）✅、手動インポート経路 ✅、**実サイトの plan/fetch/parser ⬜** | 許可を得た方式で実データのフィクスチャテストが通る | `adapters/` `ingestion/http.py` `tests/integration/test_collect.py` |
+| 6 運用・出力 | ✅ | CLI、スケジューリング（`schedule --once`）、再試行、バックフィル、途中再開、CSV/Excel/Parquet、監査、バックアップ/復元、運用文書 | 出力・監査・復元・CLI の E2E テストが通る | `cli/` `exports/` `quality/audit.py` `storage/backup.py` `docs/operations.md` |
+
+## Phase 5 の残作業（ブロッカー: `spec_review.md` Q1）
+
+1. 運営者に、取得方式・頻度・用途の許可（またはデータ提供契約）を打診する。
+2. 許可を得たら、`config/sources/<code>.yaml` に `permitted` と `permission_reference` を記録する。
+3. 許可された方式のエンドポイント・形式・認証・過去期間を `source_contracts.md` に記録する。
+4. `plan` / `fetch` / パーサーを実装し、実データ由来のフィクスチャで単体テストを書く。パーサーの出力は `schemas/parsed.py` の中間表現にする。
+5. 自動取得で得られない項目は NULL（`not_published`）とし、手動インポートで補う。
+
+## 仕様の必須テストケースとの対応
+
+| 必須テストケース | テスト |
+|---|---|
+| 同一原本の再投入 | `test_pipeline.py::test_reimport_same_raw_is_idempotent`, `::test_parallel_import_of_same_file` |
+| 同日複数回取得 | `test_pipeline.py::test_multiple_fetches_same_day_keep_snapshots`, `::test_value_regression_detected` |
+| 閉店後訂正 | `test_pipeline.py::test_correction_after_close_and_settle_to_final` |
+| 異なるサイト間の値不一致 | `test_pipeline.py::test_source_mismatch_recorded_and_priority_applied` |
+| 機種入替 | `test_pipeline.py::test_model_swap_splits_installations`, `test_constraints.py::test_installation_periods_cannot_overlap` |
+| 台番号変更 | `test_layout.py::test_layout_switch_and_past_reproduction`（renumbered_candidates） |
+| 配置版切替 | `test_layout.py::test_layout_switch_and_past_reproduction`, `::test_cannot_publish_overlapping_or_earlier_period` |
+| 当たり履歴の順序訂正 | `test_pipeline.py::test_bonus_history_order_correction_keeps_all_series` |
+| グラフ座標の全点保持 | `test_pipeline.py::test_slump_all_points_kept_without_limit` |
+| 途中失敗後再開 | `test_collect.py::test_collect_partial_failure_then_resume`, `::test_pending_raw_recovered_by_reparse` |
+| 原本からの再解析 | `test_pipeline.py::test_reparse_with_new_parser_version` |
+| 取得不能・NULL | `test_pipeline.py::test_import_creates_observation_stat_and_revision`, `test_ops.py::test_export_formats_keep_nulls_and_sources`, `test_collect.py`（FETCH_FAILED） |
+| 並列収集競合 | `test_pipeline.py::test_parallel_reconcile_is_serialized`, `::test_parallel_import_of_same_file` |
+| バックアップ復元 | `test_ops.py::test_backup_and_restore_roundtrip` |
+
+## 後続フェーズ（初期範囲外）
+
+- 予測モデル・設定推測（`analysis_results` に根拠付きで保存する。確定設定としては扱わない）
+- GUI / API
+- 大規模化への対応（時系列パーティショニング、Parquet の定期エクスポート、オブジェクトストレージの `RawStore` 実装）

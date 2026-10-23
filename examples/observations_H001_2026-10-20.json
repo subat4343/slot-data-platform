@@ -1,0 +1,43 @@
+{
+  "format": "slot-data/manual-v1",
+  "hall_code": "H001",
+  "observed_at": "2026-10-20T23:10:00+09:00",
+  "business_date": "2026-10-20",
+  "source_state": "closed",
+  "scope": "営業日累計",
+  "machines": [
+    {
+      "machine_number": "301",
+      "model_name": "サンプル機種A",
+      "fields": {
+        "total_games": {"value": 6120, "raw": "6,120", "label": "総回転", "unit": "G"},
+        "net_medals": {"value": 1450, "raw": "+1,450", "label": "差枚"},
+        "bb_count": {"value": 21, "label": "BIG", "category": "BB"},
+        "rb_count": {"value": 14, "label": "REG", "category": "RB"},
+        "at_count": {"status": "not_applicable"},
+        "max_net_medals": {"value": 2100, "origin": "graph_estimated", "definition": "グラフ目視"}
+      },
+      "bonus_events": {
+        "status": "partial",
+        "events": [
+          {"ordinal": 1, "hit_games": 210, "cumulative_games": 210, "raw_label": "BIG", "normalized_type": "BB", "payout_medals": 252},
+          {"ordinal": 2, "hit_games": 95, "cumulative_games": 305, "raw_label": "REG", "normalized_type": "RB", "payout_medals": 96}
+        ]
+      },
+      "slump_series": [
+        {"series_key": "main", "x_axis_type": "cumulative_games", "x_unit": "games", "y_axis_type": "net_medals", "y_unit": "medals",
+         "points": [{"x_numeric": 0, "y_numeric": 0}, {"x_numeric": 210, "y_numeric": -420}, {"x_numeric": 305, "y_numeric": -380}, {"x_numeric": 6120, "y_numeric": 1450}]}
+      ]
+    },
+    {
+      "machine_number": "302",
+      "model_name": "サンプル機種A",
+      "fields": {"total_games": 0, "net_medals": 0, "bb_count": 0, "rb_count": 0}
+    },
+    {
+      "machine_number": "303",
+      "model_name": "サンプル機種B",
+      "fields": {"total_games": 4410, "net_medals": -980, "bb_count": null, "rb_count": null, "at_count": 3, "first_hit_count": 9}
+    }
+  ]
+}
