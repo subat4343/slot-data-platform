@@ -1,4 +1,4 @@
-# 開発用 PostgreSQL 16（Docker が無い Windows 向け。インストーラ・管理者権限は不要）
+﻿# 開発用 PostgreSQL 16（Docker が無い Windows 向け。インストーラ・管理者権限は不要）
 # 使い方: ./scripts/dev-postgres.ps1 setup | start | stop | status
 # trust 認証で localhost:55432 に起動する。開発専用で、本番には使わない。
 param([Parameter(Mandatory = $true)][ValidateSet("setup", "start", "stop", "status")] [string]$Command)
