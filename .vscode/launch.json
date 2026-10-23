@@ -2,15 +2,38 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "P's CUBE 台詳細までの確認（目視）",
+      "name": "P's CUBE 台詳細までの確認（目視・ぱちタウン経由）",
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}/scripts/pscube_walkthrough.py",
-      "args": ["--model", "マイジャグラーⅥ"],
+      "args": [
+        "--model",
+        "マイジャグラーⅥ"
+      ],
       "cwd": "${workspaceFolder}",
       "python": "${workspaceFolder}/.venv/Scripts/python.exe",
       "console": "integratedTerminal",
-      "env": { "PYTHONIOENCODING": "utf-8" },
+      "env": {
+        "PYTHONIOENCODING": "utf-8"
+      },
+      "justMyCode": true
+    },
+    {
+      "name": "P's CUBE 台詳細までの確認（目視・P's CUBE 直接）",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/pscube_walkthrough.py",
+      "args": [
+        "--model",
+        "マイジャグラーⅥ",
+        "--direct"
+      ],
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONIOENCODING": "utf-8"
+      },
       "justMyCode": true
     }
   ]
