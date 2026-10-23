@@ -123,6 +123,7 @@
 | `max_net_medals` | BIGINT | 可 |  |  |
 | `min_net_medals` | BIGINT | 可 |  |  |
 | `max_payout_medals` | BIGINT | 可 |  |  |
+| `bonus_count` | INTEGER | 可 |  |  |
 | `field_status` | JSONB | 不可 | '{}' |  |
 | `data_status` | TEXT | 不可 |  |  |
 | `quality_status` | TEXT | 不可 |  |  |
@@ -136,6 +137,7 @@
 
 - CHECK `ck_daily_machine_stats_at_count_non_negative`: `at_count IS NULL OR at_count >= 0`
 - CHECK `ck_daily_machine_stats_bb_count_non_negative`: `bb_count IS NULL OR bb_count >= 0`
+- CHECK `ck_daily_machine_stats_bonus_count_non_negative`: `bonus_count IS NULL OR bonus_count >= 0`
 - CHECK `ck_daily_machine_stats_cz_count_non_negative`: `cz_count IS NULL OR cz_count >= 0`
 - CHECK `ck_daily_machine_stats_data_status_valid`: `data_status IN ('provisional', 'final_candidate', 'final')`
 - CHECK `ck_daily_machine_stats_first_hit_count_non_negative`: `first_hit_count IS NULL OR first_hit_count >= 0`
