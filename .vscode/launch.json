@@ -1,0 +1,17 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "P's CUBE 台詳細までの確認（目視）",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/pscube_walkthrough.py",
+      "args": ["--model", "マイジャグラーⅥ"],
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal",
+      "env": { "PYTHONIOENCODING": "utf-8" },
+      "justMyCode": true
+    }
+  ]
+}

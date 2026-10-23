@@ -25,6 +25,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.5"]
+browser = ["playwright>=1.45"]
 
 [project.scripts]
 slot-data = "slot_data.cli.main:app"
