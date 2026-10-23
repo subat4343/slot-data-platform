@@ -215,8 +215,18 @@ def test_cli_end_to_end(engine, session_factory, tmp_path, monkeypatch):
     assert rows[0]["model_name"] == "機種X" and rows[0]["bb_count"] == "3" and rows[0]["corner_rank"] == "1"
     run("audit")
     run("issues")
-    # 自動収集は利用条件により拒否される（exit 2）
-    monkeypatch.setenv("SLOT_DATA_CONFIG_PATH", str(ROOT / "config" / "app.example.yaml"))
-    out = run("collect", "--source", "pscube", "--hall", "H001", "--date", "2026-10-20", code=2)
+    # 利用条件で禁止された取得元の自動収集は、ブラウザも HTTP も使わずに拒否される（exit 2）
+    import shutil
+
+    conf_dir = tmp_path / "config"
+    shutil.copytree(ROOT / "config" / "sources", conf_dir / "sources")
+    (conf_dir / "app.yaml").write_text(
+        "targets:\n  - source: daidata_online\n    hall_code: H001\n    source_hall_id: x\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("SLOT_DATA_CONFIG_PATH", str(conf_dir / "app.yaml"))
+    config_mod.get_settings.cache_clear()
+    config_mod.get_app_config.cache_clear()
+    out = run("collect", "--source", "daidata_online", "--hall", "H001", "--date", "today", code=2)
+    assert "収集を中止しました" in out
     config_mod.get_settings.cache_clear()
     config_mod.get_app_config.cache_clear()

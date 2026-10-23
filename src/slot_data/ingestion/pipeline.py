@@ -18,7 +18,14 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
-from slot_data.adapters.base import FetchRequest, FetchResult, ParseContext, Parser, SourceAdapter
+from slot_data.adapters.base import (
+    CrawlingAdapter,
+    FetchRequest,
+    FetchResult,
+    ParseContext,
+    Parser,
+    SourceAdapter,
+)
 from slot_data.config import CollectTarget
 from slot_data.domain.enums import CaptureStatus, ParseStatus, RunStatus, Severity
 from slot_data.domain.ids import uuid7
@@ -340,6 +347,8 @@ class IngestionPipeline:
     ) -> RunSummary:
         """自動収集。アダプターの許可ゲートを最初に確認する（禁止されていれば何も取得しない）。"""
         adapter.ensure_automated_fetch_allowed()
+        if isinstance(adapter, CrawlingAdapter):
+            return self._collect_crawl(adapter, target, business_dates, client, resume_run_id)
         requests = adapter.plan(target, business_dates)
         done = self._completed_fingerprints(resume_run_id) if resume_run_id else set()
         run_id = self.start_run(
@@ -394,31 +403,112 @@ class IngestionPipeline:
                 log.warning("fetch failed: %s", exc)
                 return []
             parser = adapter.parser_for(request.kind, result.content_type)
-            result.response_metadata.setdefault("source_code", adapter.source_code)
+            return self._store_and_parse(
+                run_id, adapter.source_code, target, fingerprint, result, parser, counts, errors
+            )
+
+    def _store_and_parse(
+        self, run_id, source_code, target, fingerprint, result: FetchResult, parser, counts, errors
+    ) -> list[ObservationKey]:
+        result.response_metadata.setdefault("source_code", source_code)
+        try:
+            raw_id, parse_needed = self.persist_raw(
+                run_id=run_id,
+                source_code=source_code,
+                hall_code=target.hall_code,
+                request_fingerprint=fingerprint,
+                result=result,
+                parser_name=parser.name,
+            )
+        except Exception as exc:
+            counts["raw_failed"] += 1
+            errors.append({"stage": "raw_persist", "fingerprint": fingerprint, "message": repr(exc)})
+            log.exception("raw persist failed; normalization skipped")
+            return []
+        counts["raw_stored" if parse_needed else "raw_duplicate"] += 1
+        if not parse_needed:
+            return []
+        outcome = self.parse_raw(raw_id, parser)
+        if outcome.status == ParseStatus.FAILED:
+            counts["parse_failed"] += 1
+            errors.append({"stage": "parse", "fingerprint": fingerprint, "message": f"raw {raw_id} failed"})
+        return outcome.keys
+
+    def _collect_crawl(
+        self,
+        adapter: CrawlingAdapter,
+        target: CollectTarget,
+        business_dates: list[date],
+        client: Any,
+        resume_run_id: uuid.UUID | None,
+    ) -> RunSummary:
+        """画面遷移型の収集。各画面を原本保存→解析し、失敗した画面は欠損理由を記録する。"""
+        done = self._completed_fingerprints(resume_run_id) if resume_run_id else set()
+        run_id = self.start_run(
+            adapter.source_code,
+            target.hall_code,
+            {"kind": "crawl", "dates": [d.isoformat() for d in business_dates], "machines": target.machines},
+            adapter.adapter_version,
+            resumed_from_id=resume_run_id,
+        )
+        counts: dict[str, Any] = {
+            "pages": 0,
+            "raw_stored": 0,
+            "raw_duplicate": 0,
+            "fetch_failed": 0,
+            "raw_failed": 0,
+            "parse_failed": 0,
+        }
+        errors: list[dict[str, Any]] = []
+        keys: list[ObservationKey] = []
+        with log_context(job_id=run_id, source=adapter.source_code, hall=target.hall_code):
             try:
-                raw_id, parse_needed = self.persist_raw(
-                    run_id=run_id,
-                    source_code=adapter.source_code,
-                    hall_code=target.hall_code,
-                    request_fingerprint=fingerprint,
-                    result=result,
-                    parser_name=parser.name,
-                )
+                for step in adapter.crawl(target, business_dates, client, done):
+                    counts["pages"] += 1
+                    fingerprint = step.request.fingerprint()
+                    with log_context(
+                        business_date=step.request.business_date,
+                        machine_number=step.request.machine_number,
+                        stage=step.request.kind,
+                    ):
+                        if step.result is not None and step.parser is not None:
+                            if step.failure is not None:
+                                step.result.response_metadata["page_error"] = str(step.failure)
+                            keys.extend(
+                                self._store_and_parse(
+                                    run_id,
+                                    step.source_code or adapter.source_code,
+                                    target,
+                                    fingerprint,
+                                    step.result,
+                                    step.parser,
+                                    counts,
+                                    errors,
+                                )
+                            )
+                        if step.failure is not None:
+                            kind = getattr(step.failure, "kind", "crawl_error")
+                            counts["fetch_failed"] += 1
+                            errors.append(
+                                {
+                                    "stage": "fetch",
+                                    "fingerprint": fingerprint,
+                                    "kind": kind,
+                                    "message": str(step.failure),
+                                }
+                            )
+                            self._record_fetch_failure(
+                                run_id, target, step.request, fingerprint, str(step.failure), kind
+                            )
+                            log.warning("page failed: %s", step.failure)
             except Exception as exc:
-                counts["raw_failed"] += 1
-                errors.append({"stage": "raw_persist", "fingerprint": fingerprint, "message": repr(exc)})
-                log.exception("raw persist failed; normalization skipped")
-                return []
-            counts["raw_stored" if parse_needed else "raw_duplicate"] += 1
-            if not parse_needed:
-                return []
-            outcome = self.parse_raw(raw_id, parser)
-            if outcome.status == ParseStatus.FAILED:
-                counts["parse_failed"] += 1
-                errors.append(
-                    {"stage": "parse", "fingerprint": fingerprint, "message": f"raw {raw_id} failed"}
-                )
-            return outcome.keys
+                # ブラウザ操作の途中で止まった場合も、ここまでの原本と観測は保存済み。--resume で続きから再開できる
+                counts["fetch_failed"] += 1
+                errors.append({"stage": "crawl", "message": repr(exc)})
+                log.exception("crawl aborted")
+            counts.update(self.reconcile_keys(keys))
+            status = self.finish_run(run_id, counts, errors)
+        return RunSummary(run_id, status, counts, errors)
 
     def _record_fetch_failure(
         self, run_id, target, request: FetchRequest, fingerprint, message, kind
@@ -443,9 +533,13 @@ class IngestionPipeline:
         with self.ctx.session() as s:
             current: uuid.UUID | None = run_id
             while current is not None:
+                # 拒否画面などエラー表示を保存しただけの原本は「完了」に数えない（再開時に取り直す）
                 done.update(
                     s.scalars(
-                        select(RawPayload.request_fingerprint).where(RawPayload.collection_run_id == current)
+                        select(RawPayload.request_fingerprint).where(
+                            RawPayload.collection_run_id == current,
+                            RawPayload.response_metadata["page_error"].astext.is_(None),
+                        )
                     )
                 )
                 current = s.scalar(select(CollectionRun.resumed_from_id).where(CollectionRun.id == current))

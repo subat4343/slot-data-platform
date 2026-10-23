@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from typing import Any, Protocol
@@ -102,6 +103,40 @@ class SourceAdapter(ABC):
 
     @abstractmethod
     def parser_for(self, request_kind: str, content_type: str) -> Parser: ...
+
+    def open_client(self) -> Any:
+        """fetch / crawl に渡すクライアント。既定は HTTP クライアント。呼び出し側で close() する。"""
+        from slot_data.ingestion.http import PoliteHttpClient
+
+        return PoliteHttpClient(self.config)
+
+
+@dataclass
+class CrawlStep:
+    """画面遷移で取得した 1 画面。failure があれば result は None。"""
+
+    request: FetchRequest
+    parser: Parser | None
+    result: FetchResult | None = None
+    failure: Exception | None = None
+    # 観測を記録する取得元（同じサイトでも画面の粒度が違う場合に分ける。None ならアダプターの取得元）
+    source_code: str | None = None
+
+
+class CrawlingAdapter(SourceAdapter):
+    """取得要求を事前に列挙できず、画面遷移しながら取得するアダプター（ブラウザ操作など）。"""
+
+    def plan(self, target: CollectTarget, business_dates: list[date]) -> list[FetchRequest]:
+        self.ensure_automated_fetch_allowed()
+        return []
+
+    def fetch(self, request: FetchRequest, client: Any) -> FetchResult:
+        raise SourceNotImplementedError(f"{self.source_code}: use crawl()")
+
+    @abstractmethod
+    def crawl(
+        self, target: CollectTarget, business_dates: list[date], client: Any, skip: set[str]
+    ) -> Iterator[CrawlStep]: ...
 
 
 def ensure_allowed(source_code: str, policy: AccessPolicy) -> None:

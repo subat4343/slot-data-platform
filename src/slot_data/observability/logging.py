@@ -76,8 +76,20 @@ class TextFormatter(logging.Formatter):
         return f"{base} [{ctx}]" if ctx else base
 
 
+class _CurrentStderrHandler(logging.StreamHandler):
+    """書き込み時点の sys.stderr に出力する（差し替え・リダイレクト後の閉じたストリームを掴まない）。"""
+
+    @property
+    def stream(self):  # type: ignore[override]
+        return sys.stderr
+
+    @stream.setter
+    def stream(self, value) -> None:
+        pass
+
+
 def configure_logging(level: str = "INFO", json_format: bool = True) -> None:
-    handler = logging.StreamHandler(sys.stderr)
+    handler = _CurrentStderrHandler()
     handler.setFormatter(JsonFormatter() if json_format else TextFormatter())
     root = logging.getLogger("slot_data")
     root.handlers[:] = [handler]

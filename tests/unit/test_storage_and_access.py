@@ -40,11 +40,17 @@ def test_access_gate():
     ensure_allowed("x", AccessPolicy(automated_fetch="permitted", permission_reference="contract-123"))
 
 
-def test_shipped_source_configs_are_prohibited():
+def test_shipped_source_configs_record_access_policy():
     config = load_app_config(ROOT / "config" / "app.example.yaml")
-    for code in ("pscube", "daidata_online"):
-        policy = config.source(code).access_policy
-        assert policy.automated_fetch == "prohibited" and policy.evidence
+    daidata = config.source("daidata_online").access_policy
+    assert daidata.automated_fetch == "prohibited" and daidata.evidence
+    # P's CUBE は運営会社の許可（ユーザー申告）を根拠付きで記録したうえで permitted
+    pscube = config.source("pscube")
+    assert pscube.access_policy.automated_fetch == "permitted"
+    assert "アンジェロ" in pscube.access_policy.permission_reference
+    assert pscube.rate_limit.min_interval_seconds >= 30
+    assert pscube.options["headless"] is False
+    assert config.source_priority()["pscube"] < config.source_priority()["pscube_list"]
 
 
 def test_rate_limiter_spaces_requests():

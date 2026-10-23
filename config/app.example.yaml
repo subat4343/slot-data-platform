@@ -5,10 +5,11 @@
 
 # 自動収集の対象（取得元が access_policy.automated_fetch: permitted のときだけ実行される）
 targets:
+  # スロットハトヤ（DMMぱちタウン https://p-town.dmm.com/shops/kanagawa/13152/jackpot）
   - source: pscube
     hall_code: H001
-    source_hall_id: "REPLACE_ME"
-    machines: null  # null = 全台
+    source_hall_id: "kanagawa/13152"  # ぱちタウンの店舗パス（shops/<ここ>/jackpot）
+    machines: null  # null = 全台。台番号のリストで絞り込める（例: ["0277", "0278"]）
 
 selection:
   # final_candidate の値が同一取得元で何時間変化しなければ final とみなすか

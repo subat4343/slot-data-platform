@@ -112,19 +112,22 @@ def persist_parse_result(
     warn_abs_limits: dict[str, int] | None = None,
 ) -> list[ObservationKey]:
     keys: list[ObservationKey] = []
-    numbers = Counter(o.machine_number for o in result.observations)
+
+    def business_date(obs: ParsedObservation) -> date:
+        return obs.business_date or business_date_of(obs.observed_at, hall.timezone, hall.business_day_cutoff)
+
+    # 1 つの原本に複数営業日の値が並ぶ画面もあるため、重複は台番号＋営業日で判定する
+    occurrences = Counter((o.machine_number, business_date(o)) for o in result.observations)
     for obs in result.observations:
         machine_number = obs.machine_number
-        bdate = obs.business_date or business_date_of(
-            obs.observed_at, hall.timezone, hall.business_day_cutoff
-        )
+        bdate = business_date(obs)
         day_start = business_day_start(bdate, hall.timezone, hall.business_day_cutoff)
         findings = validate_metrics(obs, day_start, warn_abs_limits)
-        if numbers[machine_number] > 1:
+        if occurrences[(machine_number, bdate)] > 1:
             findings.append(
                 Finding(
                     "DUPLICATE_MACHINE_NUMBER",
-                    f"machine {machine_number} appears {numbers[machine_number]} times",
+                    f"machine {machine_number} appears {occurrences[(machine_number, bdate)]} times on {bdate}",
                 )
             )
         if obs.bonus_series is not None:

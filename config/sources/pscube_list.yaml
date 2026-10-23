@@ -1,0 +1,11 @@
+# P's CUBE 機種画面（台番号 × 日別 BONUS 回数）の観測を記録する取得元。
+# 取得は pscube アダプターが同じ巡回の中で行う（この取得元単独では収集しない）。
+# 台詳細（pscube）が取れた日は詳細を優先し、取れない日はこちらを採用する。
+code: pscube_list
+name: "P's CUBE（機種画面）"
+priority: 15
+enabled: true
+access_policy:
+  automated_fetch: prohibited
+  evidence:
+    - "pscube アダプターの巡回で取得する。単独の自動取得は行わない"

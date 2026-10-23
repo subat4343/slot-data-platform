@@ -81,6 +81,7 @@ class DailyMachineStat(Base):
     max_net_medals: Mapped[int | None] = mapped_column(BigInteger)
     min_net_medals: Mapped[int | None] = mapped_column(BigInteger)
     max_payout_medals: Mapped[int | None] = mapped_column(BigInteger)
+    bonus_count: Mapped[int | None] = mapped_column(Integer)
     # 値が NULL の理由（metric 名 → FieldStatus）。ゼロ補完せず理由を残す（ADR-0006）
     field_status: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'"))
     data_status: Mapped[str] = mapped_column(Text, nullable=False)

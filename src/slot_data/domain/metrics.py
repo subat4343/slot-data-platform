@@ -33,6 +33,8 @@ METRICS: tuple[MetricDef, ...] = (
     MetricDef("max_net_medals", "最大差枚", "medals", False, True, 50000),
     MetricDef("min_net_medals", "最小差枚", "medals", False, True, 50000),
     MetricDef("max_payout_medals", "最大獲得枚数", "medals", True, True, 100000),
+    # 取得元が BB/RB を区別せず合計だけを表示する場合（例: P's CUBE 機種画面の「BONUS」）
+    MetricDef("bonus_count", "ボーナス合計回数", "count", True, False, 1000),
 )
 
 METRIC_NAMES: tuple[str, ...] = tuple(m.name for m in METRICS)

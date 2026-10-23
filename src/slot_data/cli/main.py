@@ -203,7 +203,7 @@ def import_observations(
 def collect(
     source: Annotated[str, typer.Option()],
     hall: Annotated[str, typer.Option()],
-    day: Annotated[str | None, typer.Option("--date")] = None,
+    day: Annotated[str | None, typer.Option("--date", help="YYYY-MM-DD または today（店舗の営業日）")] = None,
     date_from: Annotated[str | None, typer.Option("--from")] = None,
     date_to: Annotated[str | None, typer.Option("--to")] = None,
     resume: Annotated[uuid.UUID | None, typer.Option(help="途中で止まった収集ジョブ ID から再開")] = None,
@@ -211,8 +211,9 @@ def collect(
     """自動収集。取得元の access_policy が permitted でなければ何も取得せず終了する。"""
     from slot_data.adapters import get_adapter
     from slot_data.adapters.base import AccessProhibitedError, SourceNotImplementedError
-    from slot_data.ingestion.http import PoliteHttpClient
+    from slot_data.domain.timeutil import business_date_of, utcnow
     from slot_data.ingestion.pipeline import IngestionPipeline
+    from slot_data.services.masters import get_hall
 
     ctx = _ctx()
     config = ctx.config.source(source)
@@ -221,13 +222,21 @@ def collect(
     target = next((t for t in ctx.config.targets if t.source == source and t.hall_code == hall), None)
     if target is None:
         raise typer.BadParameter(f"no collect target for {source}/{hall} in config")
+    if day == "today":
+        with ctx.session() as s:
+            h = get_hall(s, hall)
+            day = business_date_of(utcnow(), h.timezone, h.business_day_cutoff).isoformat()
     dates = _dates(
         date.fromisoformat(day) if day else None,
         date.fromisoformat(date_from) if date_from else None,
         date.fromisoformat(date_to) if date_to else None,
     )
     adapter = get_adapter(config)
-    client = PoliteHttpClient(config)
+    try:
+        client = adapter.open_client()
+    except AccessProhibitedError as exc:
+        typer.echo(f"収集を中止しました: {exc}", err=True)
+        raise typer.Exit(2) from exc
     try:
         summary = IngestionPipeline(ctx).collect(adapter, target, dates, client, resume_run_id=resume)
     except (AccessProhibitedError, SourceNotImplementedError) as exc:
