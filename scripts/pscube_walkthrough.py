@@ -8,9 +8,12 @@
 - ボット検知を回避するための偽装（UA の偽装・webdriver の隠蔽など）はしない
 - 台詳細で「error(451)」が表示された場合は検知して報告し、再試行しない
 - --direct を付けると、ぱちタウンを経由せず iframe の中身の URL を直接開く（比較用）
+- --auto を付けると Enter を待たずに --interval 秒間隔で進む（--headless で画面なし）
+- 各画面の HTML（ぱちタウン経由なら iframe の中身）も保存する（パーサーのテスト用サンプル）
 
 使い方:
     python scripts/pscube_walkthrough.py [--model マイジャグラーⅥ] [--machine 0277] [--direct]
+                                         [--auto] [--headless] [--interval 30] [--next-machines 1]
 VS Code では「実行とデバッグ」から「P's CUBE 台詳細までの確認（目視）」を選んで F5。
 """
 
@@ -33,10 +36,12 @@ OUT_ROOT = Path("var/walkthrough")
 
 
 class Walkthrough:
-    def __init__(self, page: Page, out: Path, via_ptown: bool) -> None:
+    def __init__(self, page: Page, out: Path, via_ptown: bool, auto: bool, interval: float) -> None:
         self.page = page
         self.out = out
         self.via_ptown = via_ptown
+        self.auto = auto
+        self.interval = max(interval, MIN_INTERVAL)
         self.step_no = 0
         self.last_nav = 0.0
 
@@ -45,16 +50,24 @@ class Walkthrough:
         """操作対象。ぱちタウン経由なら iframe の中、直接ならページそのもの。"""
         return self.page.frame_locator(IFRAME) if self.via_ptown else self.page
 
+    def frame(self):
+        if not self.via_ptown:
+            return self.page.main_frame
+        return self.page.locator(IFRAME).element_handle().content_frame()
+
     def current_url(self) -> str:
         if not self.via_ptown:
             return self.page.url
-        frame = self.page.locator(IFRAME).element_handle().content_frame()
+        frame = self.frame()
         return f"{self.page.url}  （iframe: {frame.url if frame else '未読み込み'}）"
 
     def confirm(self, message: str) -> None:
         self.step_no += 1
-        input(f"\n[ステップ {self.step_no}] {message}\n  → Enter で実行（中止は Ctrl+C）: ")
-        remaining = MIN_INTERVAL - (time.monotonic() - self.last_nav)
+        if self.auto:
+            print(f"\n[ステップ {self.step_no}] {message}")
+        else:
+            input(f"\n[ステップ {self.step_no}] {message}\n  → Enter で実行（中止は Ctrl+C）: ")
+        remaining = self.interval - (time.monotonic() - self.last_nav)
         if self.last_nav and remaining > 0:
             print(f"  サイト負荷を抑えるため {remaining:.0f} 秒待ちます…")
             time.sleep(remaining)
@@ -72,6 +85,9 @@ class Walkthrough:
             iframe = self.page.locator(IFRAME)
             iframe.scroll_into_view_if_needed()
             iframe.screenshot(path=str(self.out / f"{self.step_no:02d}_{name}_iframe.png"))
+        frame = self.frame()
+        if frame is not None:
+            (self.out / f"{self.step_no:02d}_{name}.html").write_text(frame.content(), encoding="utf-8")
         print(f"  表示: {self.current_url()}")
         print(f"  スクリーンショット: {shot}")
 
@@ -83,6 +99,10 @@ def main() -> None:
     parser.add_argument("--model", default="マイジャグラーⅥ", help="機種一覧でクリックする機種名（部分一致）")
     parser.add_argument("--machine", default=None, help="台番号（省略時は機種画面の先頭の台）")
     parser.add_argument("--direct", action="store_true", help="ぱちタウンを経由せず iframe の中身を直接開く")
+    parser.add_argument("--auto", action="store_true", help="Enter を待たずに自動で進む")
+    parser.add_argument("--headless", action="store_true", help="ブラウザを画面に表示しない")
+    parser.add_argument("--interval", type=float, default=MIN_INTERVAL, help="画面遷移の最小間隔（秒）")
+    parser.add_argument("--next-machines", type=int, default=0, help="台詳細の後に「次台 >>」を押す回数")
     args = parser.parse_args()
 
     out = OUT_ROOT / datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -91,10 +111,10 @@ def main() -> None:
     print(f"P's CUBE 台詳細までの確認を開始します（{route}）。ブラウザのウィンドウを見ながら進めてください。")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False, slow_mo=300)
+        browser = p.chromium.launch(headless=args.headless, slow_mo=0 if args.headless else 300)
         viewport = {"width": 430, "height": 932} if args.direct else {"width": 1280, "height": 1000}
         page = browser.new_page(viewport=viewport, locale="ja-JP")
-        w = Walkthrough(page, out, via_ptown=not args.direct)
+        w = Walkthrough(page, out, via_ptown=not args.direct, auto=args.auto, interval=args.interval)
         try:
             start = PSCUBE if args.direct else PTOWN
             w.confirm(f"ページを開きます: {start}")
@@ -126,8 +146,14 @@ def main() -> None:
                 print("\n  ★ 台詳細は「error(451)」で表示されませんでした。再試行はしません。")
             else:
                 print("\n  ★ 台詳細が表示されました。ブラウザの画面を確認してください。")
+                for i in range(args.next_machines):
+                    w.confirm("「次台 >>」をクリックします")
+                    w.view.get_by_text("次台").first.click()
+                    page.wait_for_timeout(3000)
+                    w.loaded(f"next_machine_{i + 1}")
 
-            input("\n確認が終わったら Enter でブラウザを閉じます: ")
+            if not args.auto:
+                input("\n確認が終わったら Enter でブラウザを閉じます: ")
         except KeyboardInterrupt:
             print("\n中止しました。")
         finally:
