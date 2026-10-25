@@ -2,39 +2,131 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "P's CUBE 台詳細までの確認（目視・ぱちタウン経由）",
+      "name": "収集: P's CUBE（H001・本日）",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/scripts/pscube_walkthrough.py",
-      "args": [
-        "--model",
-        "マイジャグラーⅥ"
-      ],
+      "module": "slot_data.cli.main",
+      "args": ["--text-log", "collect", "--source", "pscube", "--hall", "H001", "--date", "today"],
       "cwd": "${workspaceFolder}",
       "python": "${workspaceFolder}/.venv/Scripts/python.exe",
       "console": "integratedTerminal",
-      "env": {
-        "PYTHONIOENCODING": "utf-8"
-      },
+      "env": { "PYTHONIOENCODING": "utf-8" },
       "justMyCode": true
     },
     {
-      "name": "P's CUBE 台詳細までの確認（目視・P's CUBE 直接）",
+      "name": "収集: 途中から再開（run_id を入力）",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/scripts/pscube_walkthrough.py",
+      "module": "slot_data.cli.main",
       "args": [
-        "--model",
-        "マイジャグラーⅥ",
-        "--direct"
+        "--text-log", "collect", "--source", "pscube", "--hall", "H001",
+        "--date", "${input:businessDate}", "--resume", "${input:runId}"
       ],
       "cwd": "${workspaceFolder}",
       "python": "${workspaceFolder}/.venv/Scripts/python.exe",
       "console": "integratedTerminal",
-      "env": {
-        "PYTHONIOENCODING": "utf-8"
-      },
+      "env": { "PYTHONIOENCODING": "utf-8" },
       "justMyCode": true
+    },
+    {
+      "name": "確認: P's CUBE 画面を1ステップずつ（目視・ぱちタウン経由）",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/pscube_walkthrough.py",
+      "args": ["--model", "マイジャグラーⅥ"],
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal",
+      "env": { "PYTHONIOENCODING": "utf-8" },
+      "justMyCode": true
+    },
+    {
+      "name": "再解析: 未解析の原本（reparse --pending）",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "slot_data.cli.main",
+      "args": ["--text-log", "reparse", "--pending"],
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal",
+      "env": { "PYTHONIOENCODING": "utf-8" },
+      "justMyCode": true
+    },
+    {
+      "name": "出力: 日次実績を Excel（H001）",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "slot_data.cli.main",
+      "args": [
+        "--text-log", "export", "daily", "--out", "var/out/daily_H001.xlsx", "--format", "xlsx",
+        "--hall", "H001", "--with-layout"
+      ],
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal",
+      "env": { "PYTHONIOENCODING": "utf-8" },
+      "justMyCode": true
+    },
+    {
+      "name": "確認: 品質課題の一覧（issues）",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "slot_data.cli.main",
+      "args": ["--text-log", "issues"],
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal",
+      "env": { "PYTHONIOENCODING": "utf-8" },
+      "justMyCode": true
+    },
+    {
+      "name": "確認: 監査（audit）",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "slot_data.cli.main",
+      "args": ["--text-log", "audit"],
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal",
+      "env": { "PYTHONIOENCODING": "utf-8" },
+      "justMyCode": true
+    },
+    {
+      "name": "テスト: 全件（pytest）",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["-q"],
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal",
+      "env": { "PYTHONIOENCODING": "utf-8" },
+      "justMyCode": false
+    },
+    {
+      "name": "テスト: P's CUBE のみ（実サイトに接続しない）",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["-q", "tests/unit/test_pscube_parsers.py", "tests/integration/test_pscube_crawl.py"],
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal",
+      "env": { "PYTHONIOENCODING": "utf-8" },
+      "justMyCode": false
+    }
+  ],
+  "inputs": [
+    {
+      "id": "runId",
+      "type": "promptString",
+      "description": "再開する収集ジョブの run_id（ログの \"run_id\"）"
+    },
+    {
+      "id": "businessDate",
+      "type": "promptString",
+      "description": "対象の営業日（YYYY-MM-DD または today）",
+      "default": "today"
     }
   ]
 }
