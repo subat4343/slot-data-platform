@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import time
 from datetime import datetime
 from pathlib import Path
@@ -46,6 +47,58 @@ class Walkthrough:
         self.interval = max(interval, MIN_INTERVAL)
         self.step_no = 0
         self.last_nav = 0.0
+        self.detail_wait = DETAIL_WAIT_SECONDS
+        # 原因調査用: P's CUBE への通信とブラウザのコンソール出力を画面ごとに記録する
+        self.events: list[dict] = []
+        self.started = time.monotonic()
+        page.on("response", self._on_response)
+        page.on("requestfailed", self._on_failed)
+        page.on("console", self._on_console)
+
+    def _t(self) -> float:
+        return round(time.monotonic() - self.started, 2)
+
+    def _on_response(self, response) -> None:
+        if "pscube.jp" not in response.url:
+            return
+        request = response.request
+        event = {
+            "t": self._t(),
+            "event": "response",
+            "type": request.resource_type,
+            "method": request.method,
+            "url": response.url,
+            "status": response.status,
+            "content_type": response.headers.get("content-type"),
+            "referer": request.headers.get("referer"),
+        }
+        if request.resource_type in ("xhr", "fetch"):
+            with contextlib.suppress(Exception):
+                body = response.body()
+                event["length"] = len(body)
+                name = f"body_{len(self.events):03d}.txt"
+                (self.out / name).write_bytes(body[:500_000])
+                event["body_file"] = name
+        self.events.append(event)
+
+    def _on_failed(self, request) -> None:
+        if "pscube.jp" in request.url:
+            self.events.append(
+                {"t": self._t(), "event": "failed", "url": request.url, "error": request.failure}
+            )
+
+    def _on_console(self, message) -> None:
+        self.events.append(
+            {"t": self._t(), "event": "console", "type": message.type, "text": message.text[:500]}
+        )
+
+    def flush_events(self, name: str) -> None:
+        path = self.out / f"{self.step_no:02d}_{name}_network.json"
+        path.write_text(json.dumps(self.events, ensure_ascii=False, indent=1), encoding="utf-8")
+        xhr = [e for e in self.events if e.get("type") in ("xhr", "fetch")]
+        for e in xhr:
+            print(f"  通信: {e['status']} {e['method']} {e['url'][:110]} ({e.get('length', '?')} bytes)")
+        self.events = []
 
     @property
     def view(self) -> Page | FrameLocator:
@@ -76,12 +129,12 @@ class Walkthrough:
 
     def wait_detail(self) -> None:
         """台詳細のデータ（「累計ゲーム」）かエラーのお知らせが出るまで待つ（データは表示後の通信で届く）。"""
-        print(f"  台詳細のデータを待っています（最大 {DETAIL_WAIT_SECONDS} 秒）…")
+        print(f"  台詳細のデータを待っています（最大 {self.detail_wait} 秒）…")
         ready = self.view.get_by_text(DETAIL_DATA_TEXT).or_(
             self.view.locator("span.notifyMessage", has_text="error")
         )
         with contextlib.suppress(PlaywrightTimeoutError):
-            ready.first.wait_for(timeout=DETAIL_WAIT_SECONDS * 1000)
+            ready.first.wait_for(timeout=self.detail_wait * 1000)
 
     def loaded(self, name: str, ready_selector: str | None = None) -> None:
         if ready_selector:
@@ -99,6 +152,7 @@ class Walkthrough:
         frame = self.frame()
         if frame is not None:
             (self.out / f"{self.step_no:02d}_{name}.html").write_text(frame.content(), encoding="utf-8")
+        self.flush_events(name)
         print(f"  表示: {self.current_url()}")
         print(f"  スクリーンショット: {shot}")
 
@@ -113,6 +167,9 @@ def main() -> None:
     parser.add_argument("--auto", action="store_true", help="Enter を待たずに自動で進む")
     parser.add_argument("--headless", action="store_true", help="ブラウザを画面に表示しない")
     parser.add_argument("--interval", type=float, default=MIN_INTERVAL, help="画面遷移の最小間隔（秒）")
+    parser.add_argument(
+        "--detail-wait", type=int, default=DETAIL_WAIT_SECONDS, help="台詳細のデータを待つ最大秒数"
+    )
     parser.add_argument("--next-machines", type=int, default=0, help="台詳細の後に「次台 >>」を押す回数")
     args = parser.parse_args()
 
@@ -126,6 +183,7 @@ def main() -> None:
         viewport = {"width": 430, "height": 932} if args.direct else {"width": 1280, "height": 1000}
         page = browser.new_page(viewport=viewport, locale="ja-JP")
         w = Walkthrough(page, out, via_ptown=not args.direct, auto=args.auto, interval=args.interval)
+        w.detail_wait = args.detail_wait
         try:
             start = PSCUBE if args.direct else PTOWN
             w.confirm(f"ページを開きます: {start}")
@@ -156,7 +214,7 @@ def main() -> None:
             if "error(" in body:
                 print("\n  ★ 台詳細はエラー表示で、データは表示されませんでした。再試行はしません。")
             elif DETAIL_DATA_TEXT not in body:
-                print(f"\n  ★ {DETAIL_WAIT_SECONDS} 秒待ちましたが、台詳細のデータが表示されませんでした。")
+                print(f"\n  ★ {w.detail_wait} 秒待ちましたが、台詳細のデータが表示されませんでした。")
             else:
                 print("\n  ★ 台詳細が表示されました。ブラウザの画面を確認してください。")
                 for i in range(args.next_machines):

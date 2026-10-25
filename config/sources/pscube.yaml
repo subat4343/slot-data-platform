@@ -29,5 +29,6 @@ user_agent: "slot-data-collector/0.2"
 options:
   # 画面なし（headless）では台詳細が error(451) になったため画面ありで動かす
   headless: false
-  # 台詳細（BIG/REG/ゲーム数/出枚数）も巡回する。error(451) が出たらその回は打ち切る
-  crawl_details: true
+  # 台詳細は、データ通信（nc-m06-001.php）が自動操作に対して HTTP 451 で拒否される（2026-10-25 確認）。
+  # 運営側の正規の手段が得られるまで巡回しない
+  crawl_details: false
