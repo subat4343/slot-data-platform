@@ -137,3 +137,48 @@ def test_crawl_without_details_and_refuses_without_permission(ctx, hall):
     with pytest.raises(AccessProhibitedError):
         denied.open_client()
     assert nav.log == []
+
+
+def test_crawl_with_detail_prefers_detail_values(ctx, hall):
+    detail_html = (D / "machine_detail_0277.html").read_text(encoding="utf-8")
+    nav = FakeNavigator(detail_html)
+    summary = IngestionPipeline(ctx).collect(
+        _adapter(), TARGET.model_copy(update={"machines": ["0277"]}), [date(2026, 10, 25)], nav
+    )
+    assert summary.status == "succeeded", summary.errors
+    # 台詳細を開いたあとは「機種データ」で機種画面へ戻り、「機種一覧」へ戻る
+    assert [e for e in nav.log if "機種データ" in e or "機種一覧" in e] == [
+        "click a 機種データ",
+        "click a[href*='nc-v03-001.php'] 機種一覧",
+    ]
+    with ctx.session() as s:
+        pscube = s.scalar(select(Source).where(Source.code == "pscube"))
+
+        def stat(day):
+            return s.scalar(
+                select(DailyMachineStat).where(
+                    DailyMachineStat.machine_number == "277", DailyMachineStat.business_date == day
+                )
+            )
+
+        # 台詳細にしかない日（10/24, 10/25）
+        d25 = stat(date(2026, 10, 25))
+        assert (d25.bb_count, d25.rb_count, d25.total_games, d25.net_medals) == (20, 19, 7506, -1981)
+        assert d25.selected_source_id == pscube.id
+        # 機種画面と重なる日は台詳細（優先度が高い）を採用し、BONUS 回数の差は不一致として記録
+        d23 = stat(date(2026, 10, 23))
+        assert d23.selected_source_id == pscube.id and d23.bb_count == 32
+        # 機種画面にしかない台（0278）は機種画面の値
+        assert (
+            s.scalar(
+                select(DailyMachineStat.bonus_count).where(
+                    DailyMachineStat.machine_number == "278",
+                    DailyMachineStat.business_date == date(2026, 10, 23),
+                )
+            )
+            == 24
+        )
+        # 特賞履歴（本日分）も保存
+        from slot_data.models import BonusEvent
+
+        assert s.scalar(select(func.count()).select_from(BonusEvent)) == 20

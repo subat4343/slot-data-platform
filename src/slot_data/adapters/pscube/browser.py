@@ -1,7 +1,12 @@
 """ぱちタウン経由で P's CUBE の iframe を操作するブラウザ（Playwright）。
 
 人が閲覧するのと同じく、ぱちタウンの店舗ページを開き、埋め込まれた iframe の中をクリックで進む。
-- ボット検知回避（AutomationControlled の無効化および navigator.webdriver の隠蔽）を適用
+- 画面ありの Chromium を使う
+- 画面遷移の間隔は min_interval 秒以上空ける。同時に開くのは 1 ページだけ
+- robots.txt で禁止されたパスへは遷移しない
+- 自動操作の目印（AutomationControlled、navigator.webdriver）を無効化する（ADR-0012）。
+  運営側の線引きは「人が毎晩確認してノートに記録する程度の定点収集は可、人には不可能な頻度・差分取得は不可」
+  （ユーザー申告 2026-10-26）。頻度を上げる変更、CAPTCHA の突破、トークンの解析はしない
 """
 
 from __future__ import annotations
@@ -87,9 +92,7 @@ class PlaywrightNavigator:
             args=["--disable-blink-features=AutomationControlled"],
         )
         self._page = self._browser.new_page(viewport={"width": 1280, "height": 1000}, locale="ja-JP")
-        self._page.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
-        )
+        self._page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
         self._page.set_default_timeout(timeout_ms)
 
     def _wait_interval(self) -> None:

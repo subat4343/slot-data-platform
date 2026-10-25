@@ -72,6 +72,54 @@ def test_model_page_daily_bonus_counts():
     assert set(today.fields) == {"bonus_count"}
 
 
+def test_machine_detail_daily_and_history():
+    # 10/26 05:34 JST に開いた画面。更新時刻（10/25 22:14）から「本日」= 10/25 と判定する
+    ctx = ParseContext(
+        source_code="pscube",
+        hall_code="H001",
+        timezone="Asia/Tokyo",
+        business_day_cutoff=time(5, 0),
+        fetched_at=datetime(2026, 10, 25, 20, 34, tzinfo=UTC),
+    )
+    result = MachineDetailParser().parse((D / "machine_detail_0277.html").read_bytes(), ctx)
+    assert result.issues == []
+    assert result.source_reported_at == datetime(2026, 10, 25, 22, 14, tzinfo=ZoneInfo("Asia/Tokyo"))
+    by_day = {o.business_date: o for o in result.observations}
+    assert sorted(by_day) == [date(2026, 10, d) for d in range(19, 26)]
+
+    today = by_day[date(2026, 10, 25)]
+    assert today.source_machine_number == "0277" and today.source_model_name == "マイジャグラーⅥ"
+    values = {k: f.value for k, f in today.fields.items()}
+    assert values == {
+        "bb_count": 20,
+        "rb_count": 19,
+        "total_games": 7506,
+        "last_games": 427,
+        "net_medals": -1981,
+        "bonus_count": 39,
+    }
+    assert today.fields["net_medals"].raw == "▲ 1981"
+    assert today.fields["bonus_count"].origin == "calculated"
+    assert today.extra["total_prob"] == "1/192.5" and today.extra["big_max"] == "36"
+    assert by_day[date(2026, 10, 24)].fields["net_medals"].value == 1698
+
+    # 特賞履歴は本日の観測にだけ付く。最新 20 件（39〜20 回目）なので partial
+    series = today.bonus_series
+    assert series.status == "partial" and len(series.events) == 20
+    latest = max(series.events, key=lambda e: e.ordinal)
+    assert latest.ordinal == 39 and latest.hit_games == 587 and latest.payout_medals == 240
+    assert latest.normalized_type == "BB"
+    assert latest.event_time == datetime(2026, 10, 25, 20, 30, tzinfo=ZoneInfo("Asia/Tokyo"))
+    assert by_day[date(2026, 10, 24)].bonus_series is None
+
+
+def test_machine_detail_without_data_is_an_error():
+    # データが届く前の画面（表の枠だけ）は観測を作らない
+    html = (D / "machine_detail_error451.html").read_text(encoding="utf-8").replace("error(451)", "")
+    result = MachineDetailParser().parse(html.encode(), CTX)
+    assert result.observations == [] and result.issues[0].code == "NO_DETAIL_DATA"
+
+
 def test_error_page_detected():
     html = _read("machine_detail_error451.html")
     assert page_error_code(html) == 451

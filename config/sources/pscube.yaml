@@ -5,7 +5,7 @@ enabled: true
 access_policy:
   # 約款 第5条(1) は明示的な許可のない自動取得を禁止している。運営会社の許可がある場合のみ permitted にする。
   automated_fetch: permitted
-  reviewed_at: "2026-10-23"
+  reviewed_at: "2026-10-26"
   evidence:
     - "https://www.pscube.jp/docs/yakkan/ 第5条(1) 明示的な許可なく自動化された手段で情報を取得することを禁止"
     - "https://www.pscube.jp/robots.txt: User-agent: * Allow: /（Content-Signal: ai-train=no）"
@@ -15,6 +15,9 @@ access_policy:
     ユーザー申告（2026-10-23）: 株式会社アンジェロより許可取得済み。
     条件: 高頻度アクセスの禁止、API 等の非公開経路の利用禁止。ブラウザ操作で人が確認する程度の頻度で、
     DMMぱちタウンの店舗ページ経由で閲覧する。
+    補足（2026-10-26 ユーザー申告）: 運営側の線引きは「通常のブラウザで取得できる範囲で、人が毎晩確認して
+    ノートに記録する程度の定点収集は可。毎秒アクセスなど人には不可能な頻度・データ差分の取得は不可」。
+    自動操作そのものは否定されていない。
   respect_robots_txt: true
 rate_limit:
   # 画面遷移の最小間隔（秒）。人が順に画面を見る程度の間隔
@@ -27,8 +30,7 @@ retry:
   timeout_seconds: 60
 user_agent: "slot-data-collector/0.2"
 options:
-  # 画面なし（headless）では台詳細が error(451) になったため画面ありで動かす
+  # 画面ありで動かす
   headless: false
-  # 台詳細は、データ通信（nc-m06-001.php）が自動操作に対して HTTP 451 で拒否される（2026-10-25 確認）。
-  # 運営側の正規の手段が得られるまで巡回しない
-  crawl_details: false
+  # 台詳細も巡回する（1 日 1 回・30 秒間隔）。error(451) などが出たらその回の台詳細巡回は打ち切る
+  crawl_details: true

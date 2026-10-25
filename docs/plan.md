@@ -21,7 +21,7 @@ flowchart LR
 | 2 原本・正規化・改訂 | ✅ | 原本ストア、raw_payloads、解析版管理、観測追記、検証、採用値更新、改訂、冪等性、並行制御 | 再投入・複数回取得・訂正・不一致・再解析・並列のテストが通る | `storage/` `ingestion/` `normalization/` `reconciliation/` `tests/integration/test_pipeline.py` |
 | 3 全履歴 | ✅ | 当たり履歴系列、スランプ全点（点数無制限・バッチ挿入）、推定系列、営業中スナップショット | 12,346 点の全点保持、旧系列の保持、順序訂正の検出 | `normalization/persist.py` |
 | 4 配置管理 | ✅ | CSV/Excel 取り込み、検証、差分プレビュー、公開、位置関係・角台、手動補正、過去日の配置再現 | 版の切り替え・台番号変更・過去日の再現・不正 CSV 非反映のテストが通る | `layout/` `tests/integration/test_layout.py` `tests/unit/test_geometry.py` |
-| 5 サイトアダプター | 🟡 | 利用条件の実地確認 ✅、許可ゲート ✅、HTTP 基盤 ✅、手動インポート ✅、**P's CUBE（ぱちタウン経由のブラウザ巡回）✅**、機種一覧・機種画面パーサー ✅、**台詳細パーサー ⬜（正常表示時の HTML 待ち）**、台データオンライン ⬜（許可なし） | 実データのフィクスチャテストが通る | `adapters/pscube/` `tests/unit/test_pscube_parsers.py` `tests/integration/test_pscube_crawl.py` |
+| 5 サイトアダプター | 🟡 | 利用条件の実地確認 ✅、許可ゲート ✅、HTTP 基盤 ✅、手動インポート ✅、**P's CUBE（ぱちタウン経由のブラウザ巡回）✅**、機種一覧・機種画面パーサー ✅、台詳細パーサー ✅（2026-10-26）、台データオンライン ⬜（許可なし） | 実データのフィクスチャテストが通る | `adapters/pscube/` `tests/unit/test_pscube_parsers.py` `tests/integration/test_pscube_crawl.py` |
 | 6 運用・出力 | ✅ | CLI、スケジューリング（`schedule --once`）、再試行、バックフィル、途中再開、CSV/Excel/Parquet、監査、バックアップ/復元、運用文書 | 出力・監査・復元・CLI の E2E テストが通る | `cli/` `exports/` `quality/audit.py` `storage/backup.py` `docs/operations.md` |
 
 ## Phase 5 の残作業

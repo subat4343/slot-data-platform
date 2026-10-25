@@ -12,4 +12,5 @@
 | [0008](0008-selection-rule-v1.md) | 採用値の選択ルール v1 | 採用（仮定: 優先度） |
 | [0009](0009-layout-geometry.md) | 配置の位置関係・角台の算出規則 | 採用（仮定） |
 | [0010](0010-append-only-enforcement.md) | 追記専用・不変性の DB での担保 | 採用 |
-| [0011](0011-pscube-browser-crawl.md) | P's CUBE はぱちタウン経由・画面ありのブラウザで巡回する | 採用（ユーザー判断 2026-10-23） |
+| [0011](0011-pscube-browser-crawl.md) | P's CUBE はぱちタウン経由・画面ありのブラウザで巡回する | 採用（一部を ADR-0012 で置き換え） |
+| [0012](0012-pscube-automation-markers.md) | P's CUBE 巡回で自動操作の目印を無効化する（ADR-0011 の一部を置き換え） | 採用（ユーザー判断 2026-10-26） |
