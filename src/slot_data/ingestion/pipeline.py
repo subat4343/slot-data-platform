@@ -231,14 +231,34 @@ class IngestionPipeline:
             failed = bool(fatal) and not result.observations
             keys: list[ObservationKey] = []
             if not failed:
-                keys = persist_parse_result(
-                    s,
-                    raw=raw,
-                    parse_run=parse_run,
-                    result=result,
-                    hall=hall,
-                    warn_abs_limits=self.ctx.config.quality.warn_abs_limits,
-                )
+                try:
+                    keys = persist_parse_result(
+                        s,
+                        raw=raw,
+                        parse_run=parse_run,
+                        result=result,
+                        hall=hall,
+                        warn_abs_limits=self.ctx.config.quality.warn_abs_limits,
+                    )
+                except Exception as exc:
+                    # 保存時の DB エラーなどは、この原本だけを未解析に戻して続行する。parse_run も取り消すので、
+                    # 原因を直したあと同じパーサー版のまま reparse --pending で取り込み直せる
+                    log.exception("persisting parse result failed; raw kept for reparse --pending")
+                    s.rollback()
+                    record_issue(
+                        s,
+                        "PARSE_FAILED",
+                        entity_type="raw_payload",
+                        entity_id=raw_id,
+                        hall_id=hall.id,
+                        dedup_key=f"persist:{raw_id}:{parser.name}@{parser.version}",
+                        details={
+                            "stage": "persist",
+                            "message": repr(exc)[:2000],
+                            "recover": "reparse --pending",
+                        },
+                    )
+                    return ParseOutcome(None, ParseStatus.FAILED)
             for issue in fatal:
                 if not failed:
                     record_issue(
@@ -506,6 +526,21 @@ class IngestionPipeline:
                 counts["fetch_failed"] += 1
                 errors.append({"stage": "crawl", "message": repr(exc)})
                 log.exception("crawl aborted")
+                with self.ctx.session() as s:
+                    record_issue(
+                        s,
+                        "FETCH_FAILED",
+                        entity_type="collection_run",
+                        entity_id=run_id,
+                        hall_id=get_hall(s, target.hall_code).id,
+                        business_date=max(business_dates),
+                        dedup_key=f"{run_id}:crawl_aborted",
+                        details={
+                            "kind": "crawl_aborted",
+                            "message": repr(exc)[:2000],
+                            "recover": f"collect --resume {run_id}",
+                        },
+                    )
             counts.update(self.reconcile_keys(keys))
             status = self.finish_run(run_id, counts, errors)
         return RunSummary(run_id, status, counts, errors)

@@ -22,7 +22,7 @@
 
 | コード | 既定の重大度 | 検出箇所 | 内容 |
 |---|---|---|---|
-| NEGATIVE_VALUE | error | 観測検証 | ゲーム数・回数・獲得枚数が負（差枚の負値は正常） |
+| NEGATIVE_VALUE | error | 観測検証 | ゲーム数・回数・獲得枚数が負（差枚の負値は正常）。当たり履歴のゲーム数が負の場合は warning とし、その値だけ空にして原文を `raw_attributes.rejected_negative` に残す。当たり履歴の出枚（P's CUBE「出枚pt」）は負があり得るため検査しない |
 | OUT_OF_RANGE | warning | 観測検証 | 日次として不自然な絶対値（上限は設定可能） |
 | NORMAL_GT_TOTAL | error | 観測検証 | 通常時ゲーム数 > 総ゲーム数 |
 | MAX_LT_MIN | warning | 観測検証 | 最大差枚 < 最小差枚（両方に定義が記録されている場合だけ判定） |
@@ -37,9 +37,9 @@
 | SOURCE_MISMATCH | warning | 照合 | 同じ確定段階の異なる取得元で値が食い違う（差分を details に記録） |
 | INSTALLATION_CONFLICT | warning | 照合 | 観測された機種が既存の設置期間と矛盾（期間は書き換えない） |
 | MODEL_MAPPING_PENDING | info | 照合 | 機種の対応付けがレビュー待ち |
-| PARSE_FAILED | error | 解析 | 原本を解析できない |
+| PARSE_FAILED | error | 解析 | 原本を解析できない。解析結果の保存で例外になった場合（details.stage = persist）は原本を未解析に戻すので、原因を直して `reparse --pending` で取り込む |
 | PARSE_RECORD_REJECTED | error | 解析 | 原本内の一部レコードを解析できない |
-| FETCH_FAILED | warning | 収集 | 取得失敗（取得不能日の欠損理由） |
+| FETCH_FAILED | warning | 収集 | 取得失敗（取得不能日の欠損理由）。巡回が途中で止まった場合は details.kind = crawl_aborted と再開コマンドを記録 |
 | RAW_MISSING | critical | 監査 | 原本ファイルが無い（参照切れ） |
 | RAW_HASH_MISMATCH | critical | 監査 | 原本ファイルのハッシュが一致しない |
 | RAW_ORPHAN_FILE | info | 監査 | DB から参照されない原本ファイル |

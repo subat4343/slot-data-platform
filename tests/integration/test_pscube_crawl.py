@@ -182,3 +182,19 @@ def test_crawl_with_detail_prefers_detail_values(ctx, hall):
         from slot_data.models import BonusEvent
 
         assert s.scalar(select(func.count()).select_from(BonusEvent)) == 20
+
+
+def test_crawl_abort_is_recorded_as_issue(ctx, hall):
+    class BrokenNavigator(FakeNavigator):
+        def click(self, selector, ready_selector=None, has_text=None, ready_any=()):
+            if "btn-dai" in selector:
+                raise RuntimeError("browser crashed")
+            super().click(selector, ready_selector, has_text, ready_any)
+
+    nav = BrokenNavigator("<html></html>")
+    summary = IngestionPipeline(ctx).collect(_adapter(), TARGET, [date(2026, 10, 23)], nav)
+    assert summary.status == "partial"  # 機種一覧・機種画面は保存済み
+    with ctx.session() as s:
+        issue = s.scalar(select(DataQualityIssue).where(DataQualityIssue.issue_code == "FETCH_FAILED"))
+        assert issue.details["kind"] == "crawl_aborted"
+        assert issue.details["recover"] == f"collect --resume {summary.run_id}"

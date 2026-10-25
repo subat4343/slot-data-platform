@@ -130,6 +130,18 @@ def test_validate_bonus_and_slump():
         ],
     )
     assert [f.code for f in validate_bonus_series(series)] == ["BONUS_ORDER_INCONSISTENT"]
+    negative = ParsedBonusSeries(
+        status="complete",
+        events=[
+            ParsedBonusEvent(ordinal=1, hit_games=61, raw_label="REG", payout_medals=-7),
+            ParsedBonusEvent(ordinal=2, hit_games=-3, raw_label="BIG"),
+        ],
+    )
+    findings = validate_bonus_series(negative)
+    # 出枚のマイナスは正当な値。ゲーム数のマイナスは警告（観測全体は隔離しない）
+    assert [(f.code, f.field, f.effective_severity) for f in findings] == [
+        ("NEGATIVE_VALUE", "hit_games", "warning")
+    ]
     with pytest.raises(ValueError):
         ParsedBonusSeries(status="complete", events=[ParsedBonusEvent(ordinal=1, raw_label="a")] * 2)
     unknown = ParsedSlumpSeries(x_axis_type="unknown", y_axis_type="net_medals", points=[])

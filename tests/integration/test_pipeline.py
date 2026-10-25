@@ -585,3 +585,54 @@ def test_timestamps_and_dates_are_distinct(ctx, hall, tmp_path):
     assert obs.observed_at.utcoffset() == timedelta(0)  # 接続は UTC で扱う
     assert obs.source_reported_at == datetime(2026, 10, 20, 13, 50, tzinfo=UTC)
     assert raw.fetched_at > obs.observed_at - timedelta(days=365)
+
+
+def test_negative_bonus_values_do_not_abort_ingestion(ctx, hall, tmp_path):
+    """出枚pt のマイナスは原文どおり保存し、マイナスのゲーム数は値を空にして警告に留める。"""
+    events = [
+        {"ordinal": 1, "hit_games": 61, "raw_label": "REG", "normalized_type": "RB", "payout_medals": -7},
+        {"ordinal": 2, "hit_games": -3, "raw_label": "BIG", "normalized_type": "BB", "payout_medals": 240},
+    ]
+    doc = manual_doc(
+        [
+            {
+                "machine_number": "301",
+                "fields": {"total_games": 1000},
+                "bonus_events": {"status": "complete", "events": events},
+            }
+        ]
+    )
+    summary = IngestionPipeline(ctx).import_file("pscube", "H001", write_doc(tmp_path, "neg.json", doc))
+    assert summary.status == "succeeded", summary.errors
+    with ctx.session() as s:
+        rows = {e.ordinal: e for e in s.scalars(select(BonusEvent))}
+        assert rows[1].payout_medals == -7 and rows[1].quality_status == "valid"
+        assert rows[2].hit_games is None and rows[2].raw_attributes["rejected_negative"] == {"hit_games": -3}
+        assert rows[2].quality_status == "warning"
+    # 日次の観測は隔離されず、採用値になる
+    assert _stat(ctx).total_games == 1000
+
+
+def test_persist_failure_keeps_raw_for_reparse(ctx, hall, tmp_path, monkeypatch):
+    """保存時の例外はその原本だけを未解析に戻し、原因を直したあと reparse --pending で取り込める。"""
+    import slot_data.ingestion.pipeline as pipeline_mod
+
+    original = pipeline_mod.persist_parse_result
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("simulated DB error")
+
+    monkeypatch.setattr(pipeline_mod, "persist_parse_result", broken)
+    pipeline = IngestionPipeline(ctx)
+    path = write_doc(
+        tmp_path, "a.json", manual_doc([{"machine_number": "301", "fields": {"total_games": 5}}])
+    )
+    summary = pipeline.import_file("manual", "H001", path)
+    assert summary.status == "partial"
+    assert _count(ctx, RawPayload) == 1 and _count(ctx, ParseRun) == 0
+    assert _issues(ctx, "PARSE_FAILED")[0].details["stage"] == "persist"
+
+    monkeypatch.setattr(pipeline_mod, "persist_parse_result", original)
+    stats = pipeline.reparse(pending_only=True)
+    assert stats["parsed"] == 1
+    assert _stat(ctx).total_games == 5

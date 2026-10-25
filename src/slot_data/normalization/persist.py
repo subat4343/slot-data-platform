@@ -256,26 +256,34 @@ def _persist_bonus_series(session: Session, observation: SourceObservation, obs:
     if events:
         session.execute(
             insert(BonusEvent),
-            [
-                {
-                    "id": uuid7(),
-                    "series_id": series.id,
-                    "ordinal": e.ordinal,
-                    "source_event_id": e.source_event_id,
-                    "event_key": key,
-                    "event_time": e.event_time,
-                    "hit_games": e.hit_games,
-                    "cumulative_games": e.cumulative_games,
-                    "raw_label": e.raw_label,
-                    "normalized_type": e.normalized_type,
-                    "payout_medals": e.payout_medals,
-                    "raw_attributes": {**e.raw_attributes, **({"estimated": True} if e.estimated else {})},
-                    "quality_status": QualityStatus.WARNING if e.estimated else QualityStatus.VALID,
-                }
-                for e, key in zip(events, keys, strict=True)
-            ],
+            [_event_row(e, key, series.id) for e, key in zip(events, keys, strict=True)],
         )
     _compare_with_previous_series(session, observation, series, keys)
+
+
+def _event_row(e: ParsedBonusEvent, key: str, series_id) -> dict[str, Any]:
+    """当たり 1 件の保存行。マイナスのゲーム数は値を空にして原文を残し、警告にする（DB エラーで止めない）。"""
+    attributes = {**e.raw_attributes, **({"estimated": True} if e.estimated else {})}
+    values = {"hit_games": e.hit_games, "cumulative_games": e.cumulative_games}
+    rejected = {name: v for name, v in values.items() if v is not None and v < 0}
+    for name in rejected:
+        values[name] = None
+    if rejected:
+        attributes["rejected_negative"] = rejected
+    return {
+        "id": uuid7(),
+        "series_id": series_id,
+        "ordinal": e.ordinal,
+        "source_event_id": e.source_event_id,
+        "event_key": key,
+        "event_time": e.event_time,
+        **values,
+        "raw_label": e.raw_label,
+        "normalized_type": e.normalized_type,
+        "payout_medals": e.payout_medals,
+        "raw_attributes": attributes,
+        "quality_status": QualityStatus.WARNING if (e.estimated or rejected) else QualityStatus.VALID,
+    }
 
 
 def _compare_with_previous_series(

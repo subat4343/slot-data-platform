@@ -72,7 +72,6 @@
 - CHECK `ck_bonus_events_cumulative_non_negative`: `cumulative_games IS NULL OR cumulative_games >= 0`
 - CHECK `ck_bonus_events_hit_games_non_negative`: `hit_games IS NULL OR hit_games >= 0`
 - CHECK `ck_bonus_events_ordinal_positive`: `ordinal >= 1`
-- CHECK `ck_bonus_events_payout_non_negative`: `payout_medals IS NULL OR payout_medals >= 0`
 - CHECK `ck_bonus_events_quality_status_valid`: `quality_status IN ('valid', 'warning', 'quarantined', 'unavailable')`
 - INDEX `ix_bonus_events_event_key`: (event_key)
 - UNIQUE INDEX `uq_bonus_events_series_ordinal`: (series_id, ordinal)

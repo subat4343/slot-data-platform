@@ -77,12 +77,19 @@ def validate_bonus_series(series: ParsedBonusSeries) -> list[Finding]:
                 )
             )
         previous = event.cumulative_games
+    # 当たり 1 件の不正値で日次の観測全体を隔離しないよう、警告に留める（保存時にその値だけ空にする）。
+    # 獲得枚数（payout_medals）は取得元によってマイナスがあり得る（例: P's CUBE の「出枚pt」）ので検査しない
     for event in events:
-        for name in ("hit_games", "cumulative_games", "payout_medals"):
+        for name in ("hit_games", "cumulative_games"):
             value = getattr(event, name)
             if value is not None and value < 0:
                 findings.append(
-                    Finding("NEGATIVE_VALUE", f"bonus ordinal {event.ordinal}: {name}={value}", field=name)
+                    Finding(
+                        "NEGATIVE_VALUE",
+                        f"bonus ordinal {event.ordinal}: {name}={value}",
+                        field=name,
+                        severity=Severity.WARNING,
+                    )
                 )
     return findings
 

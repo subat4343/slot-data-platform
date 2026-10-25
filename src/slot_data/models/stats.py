@@ -178,7 +178,6 @@ class BonusEvent(Base):
         CheckConstraint("ordinal >= 1", name="ordinal_positive"),
         CheckConstraint("hit_games IS NULL OR hit_games >= 0", name="hit_games_non_negative"),
         CheckConstraint("cumulative_games IS NULL OR cumulative_games >= 0", name="cumulative_non_negative"),
-        CheckConstraint("payout_medals IS NULL OR payout_medals >= 0", name="payout_non_negative"),
         enum_check("quality_status", QualityStatus),
     )
 
@@ -194,6 +193,7 @@ class BonusEvent(Base):
     cumulative_games: Mapped[int | None] = mapped_column(BigInteger)
     raw_label: Mapped[str] = mapped_column(Text, nullable=False)
     normalized_type: Mapped[str | None] = mapped_column(Text)
+    # 取得元の「出枚」表示の値。取得元によってマイナスがあり得る（P's CUBE「出枚pt」）ため符号の制約は置かない
     payout_medals: Mapped[int | None] = mapped_column(BigInteger)
     raw_attributes: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'"))
     quality_status: Mapped[str] = mapped_column(Text, nullable=False)
