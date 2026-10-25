@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from slot_data.adapters.base import Parser
 from slot_data.adapters.manual import ManualCsvParser, ManualJsonParser
+from slot_data.adapters.pscube.parsers import MachineDetailParser, ModelListParser, ModelPageParser
 
 _PARSERS: dict[str, Parser] = {}
 
@@ -19,5 +20,16 @@ def get_parser(name: str) -> Parser:
         raise KeyError(f"parser not registered: {name}") from exc
 
 
-register_parser(ManualJsonParser())
-register_parser(ManualCsvParser())
+def registered_names() -> set[str]:
+    return set(_PARSERS)
+
+
+# 原本を作るパーサーはすべて登録する（reparse は原本に記録されたパーサー名でここから探す）
+for _parser in (
+    ManualJsonParser(),
+    ManualCsvParser(),
+    ModelListParser(),
+    ModelPageParser(),
+    MachineDetailParser(),
+):
+    register_parser(_parser)

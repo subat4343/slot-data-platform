@@ -198,3 +198,63 @@ def test_crawl_abort_is_recorded_as_issue(ctx, hall):
         issue = s.scalar(select(DataQualityIssue).where(DataQualityIssue.issue_code == "FETCH_FAILED"))
         assert issue.details["kind"] == "crawl_aborted"
         assert issue.details["recover"] == f"collect --resume {summary.run_id}"
+
+
+def test_reparse_pending_pscube_raws(ctx, hall, monkeypatch):
+    """台詳細の保存に失敗した原本を、修正後に reparse --pending で取り込める（収集用 PC の障害の再現）。"""
+    import slot_data.ingestion.pipeline as pipeline_mod
+
+    original = pipeline_mod.persist_parse_result
+
+    def fail_on_detail(*args, **kwargs):
+        if kwargs["parse_run"].parser_name == "pscube_machine_detail":
+            raise RuntimeError("simulated constraint violation")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline_mod, "persist_parse_result", fail_on_detail)
+    nav = FakeNavigator((D / "machine_detail_0277.html").read_text(encoding="utf-8"))
+    pipeline = IngestionPipeline(ctx)
+    first = pipeline.collect(
+        _adapter(), TARGET.model_copy(update={"machines": ["0277"]}), [date(2026, 10, 25)], nav
+    )
+    assert first.counts["parse_failed"] == 1  # 巡回は止まらない
+
+    monkeypatch.setattr(pipeline_mod, "persist_parse_result", original)
+    stats = pipeline.reparse(pending_only=True)
+    assert stats["parsed"] == 1 and stats["failed"] == 0
+    with ctx.session() as s:
+        d25 = s.scalar(
+            select(DailyMachineStat).where(
+                DailyMachineStat.machine_number == "277", DailyMachineStat.business_date == date(2026, 10, 25)
+            )
+        )
+        assert d25.bb_count == 20
+
+
+def test_reparse_continues_after_unknown_parser(ctx, hall):
+    from slot_data.adapters.base import FetchResult
+    from slot_data.domain.timeutil import utcnow
+
+    pipeline = IngestionPipeline(ctx)
+    run_id = pipeline.start_run("pscube", "H001", {}, "test")
+    for name, body in (
+        ("no_such_parser", b"x"),
+        ("pscube_model_page", (D / "model_page_myjuggler6.html").read_bytes()),
+    ):
+        pipeline.persist_raw(
+            run_id=run_id,
+            source_code="pscube_list",
+            hall_code="H001",
+            request_fingerprint=name,
+            result=FetchResult(content=body, content_type="text/html", fetched_at=utcnow()),
+            parser_name=name,
+        )
+    stats = pipeline.reparse(pending_only=True)
+    assert stats["failed"] == 1 and stats["parsed"] == 1
+    with ctx.session() as s:
+        issue = s.scalar(
+            select(DataQualityIssue).where(
+                DataQualityIssue.issue_code == "PARSE_FAILED", DataQualityIssue.entity_type == "raw_payload"
+            )
+        )
+        assert "parser not registered" in issue.details["message"]

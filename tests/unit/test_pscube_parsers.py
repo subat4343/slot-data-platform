@@ -126,3 +126,20 @@ def test_error_page_detected():
     assert page_error_code(_read("model_page_myjuggler6.html")) is None
     result = MachineDetailParser().parse(html.encode(), CTX)
     assert result.observations == [] and result.issues[0].code == "PAGE_ERROR"
+
+
+def test_all_adapter_parsers_are_registered_for_reparse():
+    """原本に記録されるパーサー名は、reparse で引けるよう登録簿にすべて載っていること。"""
+    from slot_data.adapters.manual import parser_for_file
+    from slot_data.adapters.pscube import PsCubeAdapter
+    from slot_data.config import SourceConfig
+    from slot_data.ingestion.parser_registry import get_parser
+
+    adapter = PsCubeAdapter(SourceConfig(code="pscube", name="p"))
+    parsers = [
+        adapter.parser_for(kind, "text/html") for kind in ("model_list", "model_page", "machine_detail")
+    ]
+    parsers += [parser_for_file("a.json")[0], parser_for_file("a.csv")[0]]
+    for parser in parsers:
+        registered = get_parser(parser.name)
+        assert type(registered) is type(parser) and registered.version == parser.version

@@ -607,7 +607,24 @@ class IngestionPipeline:
         stats = {"targets": len(targets), "parsed": 0, "skipped": 0, "failed": 0}
         keys: list[ObservationKey] = []
         for raw_id in targets:
-            outcome = self.parse_raw(raw_id)
+            try:
+                outcome = self.parse_raw(raw_id)
+            except Exception as exc:
+                # 1 件の原本の問題（パーサー未登録など）で残りの再解析を止めない
+                log.exception("reparse failed for raw %s", raw_id)
+                stats["failed"] += 1
+                with self.ctx.session() as s:
+                    raw = s.get(RawPayload, raw_id)
+                    record_issue(
+                        s,
+                        "PARSE_FAILED",
+                        entity_type="raw_payload",
+                        entity_id=raw_id,
+                        hall_id=raw.hall_id if raw else None,
+                        dedup_key=f"reparse:{raw_id}:{type(exc).__name__}",
+                        details={"stage": "reparse", "message": repr(exc)[:2000]},
+                    )
+                continue
             if outcome.skipped:
                 stats["skipped"] += 1
             elif outcome.status == ParseStatus.FAILED:
