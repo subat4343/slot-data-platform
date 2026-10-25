@@ -32,6 +32,8 @@ PTOWN = "https://p-town.dmm.com/shops/kanagawa/13152/jackpot"
 PSCUBE = "https://www.pscube.jp/dedamajyoho-P-townDMMpachi/c743201/"
 IFRAME = "#dedama-iframe"
 MIN_INTERVAL = 15.0
+DETAIL_DATA_TEXT = "累計ゲーム"
+DETAIL_WAIT_SECONDS = 30
 OUT_ROOT = Path("var/walkthrough")
 
 
@@ -71,6 +73,15 @@ class Walkthrough:
         if self.last_nav and remaining > 0:
             print(f"  サイト負荷を抑えるため {remaining:.0f} 秒待ちます…")
             time.sleep(remaining)
+
+    def wait_detail(self) -> None:
+        """台詳細のデータ（「累計ゲーム」）かエラーのお知らせが出るまで待つ（データは表示後の通信で届く）。"""
+        print(f"  台詳細のデータを待っています（最大 {DETAIL_WAIT_SECONDS} 秒）…")
+        ready = self.view.get_by_text(DETAIL_DATA_TEXT).or_(
+            self.view.locator("span.notifyMessage", has_text="error")
+        )
+        with contextlib.suppress(PlaywrightTimeoutError):
+            ready.first.wait_for(timeout=DETAIL_WAIT_SECONDS * 1000)
 
     def loaded(self, name: str, ready_selector: str | None = None) -> None:
         if ready_selector:
@@ -139,17 +150,19 @@ def main() -> None:
             machine = args.machine or machines[0]
             w.confirm(f"台番号「{machine}」をクリックして台詳細を開きます")
             w.view.locator("a.btn-dai", has_text=machine).first.click()
-            page.wait_for_timeout(3000)
+            w.wait_detail()
             w.loaded("machine_detail")
             body = w.view.locator("body").inner_text()
-            if "error(451)" in body:
-                print("\n  ★ 台詳細は「error(451)」で表示されませんでした。再試行はしません。")
+            if "error(" in body:
+                print("\n  ★ 台詳細はエラー表示で、データは表示されませんでした。再試行はしません。")
+            elif DETAIL_DATA_TEXT not in body:
+                print(f"\n  ★ {DETAIL_WAIT_SECONDS} 秒待ちましたが、台詳細のデータが表示されませんでした。")
             else:
                 print("\n  ★ 台詳細が表示されました。ブラウザの画面を確認してください。")
                 for i in range(args.next_machines):
                     w.confirm("「次台 >>」をクリックします")
                     w.view.get_by_text("次台").first.click()
-                    page.wait_for_timeout(3000)
+                    w.wait_detail()
                     w.loaded(f"next_machine_{i + 1}")
 
             if not args.auto:

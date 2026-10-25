@@ -41,6 +41,8 @@ PTOWN_URL = "https://p-town.dmm.com/shops/{shop}/jackpot"
 SLOT_DATA_LINK = "a[href*='nc-v03-001.php']"
 MODEL_LINK = "a.btn-ki"
 MACHINE_LINK = "a.btn-dai"
+# 台詳細のデータは表示後の通信で届くため、データ（「累計ゲーム」）かエラーのお知らせが出るまで待つ
+DETAIL_READY = ("text=累計ゲーム", "span.notifyMessage:has-text('error')")
 LIST_SOURCE = "pscube_list"  # 機種画面（日別 BONUS 回数）の観測を記録する取得元
 
 
@@ -141,7 +143,7 @@ class PsCubeAdapter(CrawlingAdapter):
                     detail_req = request("machine_detail", href, number)
                     if detail_req.fingerprint() in skip:
                         continue
-                    nav.click(f"{MACHINE_LINK}[href='{href}']")
+                    nav.click(f"{MACHINE_LINK}[href='{href}']", ready_any=DETAIL_READY)
                     detail_html = nav.html()
                     detail_code = page_error_code(detail_html)
                     # 拒否画面も証跡として原本保存し、失敗として記録する

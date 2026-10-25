@@ -28,7 +28,11 @@ class Navigator(Protocol):
     def open(self, url: str, ready_selector: str) -> None: ...
 
     def click(
-        self, selector: str, ready_selector: str | None = None, has_text: str | None = None
+        self,
+        selector: str,
+        ready_selector: str | None = None,
+        has_text: str | None = None,
+        ready_any: tuple[str, ...] = (),
     ) -> None: ...
 
     def html(self) -> str: ...
@@ -97,11 +101,18 @@ class PlaywrightNavigator:
         handle = self._page.locator(IFRAME_SELECTOR).element_handle()
         return handle.content_frame() if handle else None
 
-    def _settle(self, ready_selector: str | None) -> None:
+    def _settle(self, ready_selector: str | None, ready_any: tuple[str, ...] = ()) -> None:
         from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
         if ready_selector:
             self._frame().locator(ready_selector).first.wait_for(timeout=self.timeout_ms)
+        elif ready_any:
+            # どれか 1 つが出るまで待つ（データが表示後の通信で届く画面向け）。出なくても今の画面を返す
+            ready = self._frame().locator(ready_any[0])
+            for selector in ready_any[1:]:
+                ready = ready.or_(self._frame().locator(selector))
+            with contextlib.suppress(PlaywrightTimeoutError):
+                ready.first.wait_for(timeout=self.timeout_ms)
         else:
             self._page.wait_for_timeout(3000)
         # ぱちタウンは広告・計測の通信が続くため networkidle を待ち切らない
@@ -115,14 +126,20 @@ class PlaywrightNavigator:
         self._page.goto(url)
         self._settle(ready_selector)
 
-    def click(self, selector: str, ready_selector: str | None = None, has_text: str | None = None) -> None:
+    def click(
+        self,
+        selector: str,
+        ready_selector: str | None = None,
+        has_text: str | None = None,
+        ready_any: tuple[str, ...] = (),
+    ) -> None:
         locator = self._frame().locator(selector, has_text=has_text).first
         href = locator.get_attribute("href")
         if href:
             self.robots.check(urljoin(self.url(), href))
         self._wait_interval()
         locator.click()
-        self._settle(ready_selector)
+        self._settle(ready_selector, ready_any)
 
     def html(self) -> str:
         frame = self._content_frame()

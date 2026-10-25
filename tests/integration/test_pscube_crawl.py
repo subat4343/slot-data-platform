@@ -45,7 +45,7 @@ class FakeNavigator:
         self.log.append(f"open {url}")
         self.current = "top"
 
-    def click(self, selector, ready_selector=None, has_text=None):
+    def click(self, selector, ready_selector=None, has_text=None, ready_any=()):
         self.log.append(f"click {selector} {has_text or ''}".strip())
         if "nc-v03-001" in selector:
             self.current = "list"
