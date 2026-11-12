@@ -3,6 +3,7 @@
 人が閲覧するのと同じく、ぱちタウンの店舗ページを開き、埋め込まれた iframe の中をクリックで進む。
 - 画面ありの Chromium を使う
 - 画面遷移の間隔は min_interval 秒以上空ける。同時に開くのは 1 ページだけ
+- 機種一覧は最後までスクロールして全件を読み込む（追加読み込みは 1 回ごとに 10 秒以上空ける。ADR-0013）
 - robots.txt で禁止されたパスへは遷移しない
 - 自動操作の目印（AutomationControlled、navigator.webdriver）を無効化する（ADR-0012）。
   運営側の線引きは「人が毎晩確認してノートに記録する程度の定点収集は可、人には不可能な頻度・差分取得は不可」
@@ -35,7 +36,14 @@ class Navigator(Protocol):
         ready_selector: str | None = None,
         has_text: str | None = None,
         ready_any: tuple[str, ...] = (),
+        expect_machine_change: bool = False,
     ) -> None: ...
+
+    def scroll_to_end(self, item_selector: str, interval: float, max_rounds: int) -> int: ...
+
+    def current_machine(self) -> str | None: ...
+
+    def exists(self, selector: str) -> bool: ...
 
     def html(self) -> str: ...
 
@@ -138,14 +146,68 @@ class PlaywrightNavigator:
         ready_selector: str | None = None,
         has_text: str | None = None,
         ready_any: tuple[str, ...] = (),
+        expect_machine_change: bool = False,
     ) -> None:
         locator = self._frame().locator(selector, has_text=has_text).first
         href = locator.get_attribute("href")
         if href:
             self.robots.check(urljoin(self.url(), href))
         self._wait_interval()
+        before = self.current_machine() if expect_machine_change else None
         locator.click()
+        if expect_machine_change:
+            # 「次台 >>」は URL を変えずに画面の中身だけを次の台に切り替える（2026-11-13 確認）。
+            # 表示中の台番号が変わるまで待つ。待たないと古い画面の要素で ready_any が満たされてしまう。
+            # 変わらなければ（端に達したなど）呼び出し側が台番号で判断する
+            deadline = time.monotonic() + self.timeout_ms / 1000
+            while self.current_machine() == before and time.monotonic() < deadline:
+                self._page.wait_for_timeout(200)
         self._settle(ready_selector, ready_any)
+
+    def scroll_to_end(self, item_selector: str, interval: float, max_rounds: int) -> int:
+        """一覧の最後の項目までスクロールして追加読み込みさせ、件数が増えなくなるまで繰り返す。件数を返す。
+
+        追加読み込みは 1 回ごとに interval 秒以上空ける。件数が増えなかった時点（または max_rounds 回）で終える。
+        """
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+        items = self._frame().locator(item_selector)
+        count = items.count()
+        for _ in range(max_rounds):
+            last_load = time.monotonic()
+            items.nth(count - 1).scroll_into_view_if_needed()
+            grown = False
+            wait_until = time.monotonic() + max(interval, 15)
+            while time.monotonic() < wait_until:
+                self._page.wait_for_timeout(500)
+                if items.count() > count:
+                    grown = True
+                    break
+            with contextlib.suppress(PlaywrightTimeoutError):
+                self._frame().locator("div.nc-loader").first.wait_for(state="hidden", timeout=15_000)
+            new_count = items.count()
+            if not grown and new_count <= count:
+                break
+            count = new_count
+            remaining = interval - (time.monotonic() - last_load)
+            if remaining > 0:
+                self._sleep(remaining)
+        self._last_nav = time.monotonic()
+        return count
+
+    def current_machine(self) -> str | None:
+        """表示中の台詳細の台番号（body の nc-da-XXXX クラス）。台詳細でなければ None。"""
+        frame = self._content_frame()
+        if frame is None:
+            return None
+        classes = frame.evaluate("() => document.body ? document.body.className : ''") or ""
+        for cls in classes.split():
+            if cls.startswith("nc-da-"):
+                return cls.removeprefix("nc-da-")
+        return None
+
+    def exists(self, selector: str) -> bool:
+        return self._frame().locator(selector).count() > 0
 
     def html(self) -> str:
         frame = self._content_frame()

@@ -159,3 +159,15 @@ def test_next_deadline():
     assert next_deadline(datetime(2026, 11, 13, 3, 0, tzinfo=jst), time(4, 45)) == datetime(
         2026, 11, 13, 4, 45, tzinfo=jst
     )
+
+
+def test_full_model_list_after_scroll():
+    """最後までスクロールして全件を読み込んだ一覧（2026-11-13 の実画面）。21 件目以降の 1 台の機種も取れる。"""
+    models = parse_model_list(_read("model_list_full.html"))
+    assert len(models) == 148
+    assert sum(m.machine_count or 0 for m in models) == 233
+    names = {m.name for m in models}
+    assert any("秘宝伝" in n for n in names)  # レビューで欠けていると指摘された 1 台の機種
+    assert sum(1 for m in models if m.machine_count == 1) > 50
+    result = ModelListParser().parse(_read("model_list_full.html").encode(), CTX)
+    assert result.issues == []  # 区切り（20 件）ちょうどではないので取りこぼし扱いにしない

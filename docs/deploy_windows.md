@@ -40,7 +40,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-windows.ps1
 ```
 
 - Chromium のウィンドウが開き、ぱちタウンの店舗ページ → スロットデータ → 各機種 → 各台の順に自動で進みます。
-- 画面遷移の間隔は 30 秒です。機種約 20・台約 100 だと、全体で 1 時間程度かかります。
+- 機種一覧を最後までスクロールしたあと（約 2 分）、台詳細を「次台 >>」で 1 台ずつ 30 秒間隔で進みます。約 230 台で、全体で約 2 時間かかります。
 - 途中でウィンドウを閉じたり操作したりしないでください。
 
 確認だけなら台詳細を回らない設定で短時間に試せます（`config\sources\pscube.yaml` の `crawl_details: false`）。
