@@ -7,6 +7,7 @@
 #
 # 収集は画面ありのブラウザを使うため「ユーザーがログオンしているときのみ実行」で登録する。
 # 23:30 にはこの PC でユーザーがログオンしている（画面ロックは可）必要がある。
+# 実行上限は 5 時間 30 分（23:30 開始で 05:00 まで）。巡回自体も 04:45 に打ち切る（pscube の options.deadline）。
 param(
     [string]$At = "23:30",
     [string]$Source = "pscube",
@@ -40,7 +41,7 @@ $collectTrigger = New-ScheduledTaskTrigger -Daily -At $At
 $collectSettings = New-ScheduledTaskSettingsSet `
     -WakeToRun `
     -StartWhenAvailable `
-    -ExecutionTimeLimit (New-TimeSpan -Hours 3) `
+    -ExecutionTimeLimit (New-TimeSpan -Hours 5 -Minutes 30) `
     -MultipleInstances IgnoreNew `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries

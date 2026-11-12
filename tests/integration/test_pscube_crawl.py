@@ -39,6 +39,7 @@ class FakeNavigator:
             "detail": detail_html,
         }
         self.current = "top"
+        self.machine = None
         self.log: list[str] = []
 
     def open(self, url, ready_selector):
@@ -53,12 +54,18 @@ class FakeNavigator:
             self.current = "model"
         elif "btn-dai" in selector:
             self.current = "detail"
+            self.machine = selector.split("cd_dai=")[-1].rstrip("']")
 
     def html(self):
         return self.pages.get(self.current, "<html></html>")
 
     def url(self):
-        return f"https://www.pscube.jp/fake/{self.current}"
+        base = "https://www.pscube.jp/dedamajyoho-P-townDMMpachi/c743201/cgi-bin/"
+        return {
+            "list": base + "nc-v03-001.php?cd_ps=2",
+            "model": base + "nc-v05-003.php?cd_ps=2&bai=21.277",
+            "detail": base + f"nc-v06-001.php?cd_dai={self.machine}",
+        }.get(self.current, "https://p-town.dmm.com/shops/kanagawa/13152/jackpot")
 
     def close(self):
         pass
@@ -258,3 +265,82 @@ def test_reparse_continues_after_unknown_parser(ctx, hall):
             )
         )
         assert "parser not registered" in issue.details["message"]
+
+
+def test_detail_click_that_does_not_navigate_is_not_saved(ctx, hall):
+    """台番号をクリックしても台詳細に遷移しなかった場合、遷移前の画面を台詳細として保存しない。"""
+
+    class StuckNavigator(FakeNavigator):
+        def click(self, selector, ready_selector=None, has_text=None, ready_any=()):
+            if "btn-dai" in selector:
+                self.log.append(f"click {selector}")
+                return  # 画面が変わらない（機種画面のまま）
+            super().click(selector, ready_selector, has_text, ready_any)
+
+    nav = StuckNavigator((D / "machine_detail_0277.html").read_text(encoding="utf-8"))
+    summary = IngestionPipeline(ctx).collect(
+        _adapter(), TARGET.model_copy(update={"machines": ["0277", "0278"]}), [date(2026, 10, 25)], nav
+    )
+    assert summary.status == "partial"
+    # 1 台目で止まったら、その機種の残り（0278）は飛ばし、「機種データ」も押さずに機種一覧へ戻る
+    assert not any("0278" in e for e in nav.log)
+    assert not any("機種データ" in e for e in nav.log)
+    assert nav.log[-1].endswith("機種一覧")
+    with ctx.session() as s:
+        kinds = [r.response_metadata.get("page_kind") for r in s.scalars(select(RawPayload))]
+        assert "machine_detail" not in kinds
+        issue = s.scalar(select(DataQualityIssue).where(DataQualityIssue.issue_code == "FETCH_FAILED"))
+        assert issue.details["kind"] == "wrong_page" and issue.machine_number == "0277"
+
+
+def test_crawl_stops_at_deadline(ctx, hall, monkeypatch):
+    import slot_data.adapters.pscube as pscube_mod
+    from slot_data.domain.timeutil import utcnow
+
+    monkeypatch.setattr(pscube_mod, "next_deadline", lambda start, at: utcnow())  # すでに締め切り
+    nav = FakeNavigator("<html></html>")
+    summary = IngestionPipeline(ctx).collect(_adapter(), TARGET, [date(2026, 10, 23)], nav)
+    assert summary.status == "partial"
+    assert not any("btn-ki" in e for e in nav.log)  # 機種画面には進まない
+    with ctx.session() as s:
+        issue = s.scalar(select(DataQualityIssue).where(DataQualityIssue.issue_code == "FETCH_FAILED"))
+        assert issue.details["kind"] == "deadline"
+
+
+def test_resume_retries_raws_that_failed_to_parse(ctx, hall, monkeypatch):
+    """解析に失敗した原本は、--resume で取得済みとして飛ばさずに取り直す。"""
+    import slot_data.ingestion.pipeline as pipeline_mod
+
+    original = pipeline_mod.persist_parse_result
+
+    def fail_on_detail(*args, **kwargs):
+        if kwargs["parse_run"].parser_name == "pscube_machine_detail":
+            raise RuntimeError("simulated")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline_mod, "persist_parse_result", fail_on_detail)
+    detail = (D / "machine_detail_0277.html").read_text(encoding="utf-8")
+    target = TARGET.model_copy(update={"machines": ["0277"]})
+    pipeline = IngestionPipeline(ctx)
+    first = pipeline.collect(_adapter(), target, [date(2026, 10, 25)], FakeNavigator(detail))
+    monkeypatch.setattr(pipeline_mod, "persist_parse_result", original)
+
+    nav = FakeNavigator(detail)
+    resumed = pipeline.collect(_adapter(), target, [date(2026, 10, 25)], nav, resume_run_id=first.run_id)
+    assert any("cd_dai=0277" in e for e in nav.log)  # 取り直した
+    assert resumed.counts["parse_failed"] == 0
+
+
+def test_truncated_model_list_is_reported(ctx, hall):
+    """機種一覧がちょうど 20 件（読み込みの区切り）なら MODEL_LIST_TRUNCATED を出す。"""
+    nav = FakeNavigator("<html></html>")
+    nav.pages["list"] = (D / "model_list.html").read_text(encoding="utf-8")  # 20 機種で切れた実画面
+    nav.click = lambda selector, ready_selector=None, has_text=None, ready_any=(): (
+        setattr(nav, "current", "list") if "nc-v03-001" in selector else setattr(nav, "current", "error")
+    )
+    IngestionPipeline(ctx).collect(_adapter(crawl_details=False), TARGET, [date(2026, 10, 23)], nav)
+    with ctx.session() as s:
+        issue = s.scalar(
+            select(DataQualityIssue).where(DataQualityIssue.issue_code == "MODEL_LIST_TRUNCATED")
+        )
+        assert issue is not None and "20 件" in issue.details["message"]

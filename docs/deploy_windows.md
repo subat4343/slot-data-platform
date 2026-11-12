@@ -59,16 +59,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\register-tasks.ps1
 - 時刻を変える場合: `register-tasks.ps1 -At 23:45`
 - 解除: `register-tasks.ps1 -Unregister`
 - 23:30 に PC が起動していなかった場合は、次に起動したときに実行されます（StartWhenAvailable）。
-- 実行中に次の回が来た場合は、新しい回を起動しません。3 時間を超えたら打ち切ります。
+- 実行中に次の回が来た場合は、新しい回を起動しません。5 時間 30 分（23:30 開始で 05:00）を超えたら打ち切ります。巡回自体も 04:45 に打ち切り、`FETCH_FAILED`（kind=deadline）を記録します。
+- 実行上限を変更した版に更新したときは、`register-tasks.ps1` を実行し直してタスクを登録し直してください。
 
 ## 5. 結果の確認
 
 | 確認したいこと | 方法 |
 |---|---|
-| 実行ログ | `var\log\collect-YYYYMMDD-HHMMSS.log` |
+| 実行ログ | `var\log\collect-YYYYMMDD-HHMMSS.log`（まとめ。処理の終了後に収集の出力が追記される） |
+| 実行中・打ち切り時のログ | `var\log\collect-YYYYMMDD-HHMMSS-collect.stderr.log`（実行中から書き込まれ、上限で打ち切られても残る） |
 | 収集結果（件数・失敗） | ログ内の `"status"` と `"counts"`。`succeeded` / `partial`（一部失敗）/ `failed` |
 | 取れなかった日・台と理由 | `.venv\Scripts\slot-data issues --code FETCH_FAILED` |
-| 機種名のレビュー待ち | `.venv\Scripts\slot-data mapping list --pending` |
+| 機種名のレビュー待ち | `.venv\Scripts\slot-data mapping list --pending`。まとめて解決するには `slot-data mapping auto-resolve --reconcile-hall H001`（同名の機種があれば対応付け、無ければ取得元の機種名で作成。auto_matched として記録し、後から `mapping resolve` で付け替えられる） |
 | 出力 | `.venv\Scripts\slot-data export daily --out out\daily.xlsx --format xlsx --hall H001` |
 
 ## 6. 失敗したとき

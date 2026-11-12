@@ -35,7 +35,7 @@ from slot_data.ingestion.parser_registry import get_parser
 from slot_data.models import CollectionRun, Hall, ParseRun, RawPayload
 from slot_data.normalization.persist import ObservationKey, persist_parse_result
 from slot_data.observability.logging import get_logger, log_context
-from slot_data.quality.issues import record_issue
+from slot_data.quality.issues import ISSUE_CODES, record_issue
 from slot_data.reconciliation.reconcile import reconcile_key
 from slot_data.services import AppContext
 from slot_data.services.masters import ensure_source, get_hall
@@ -269,6 +269,22 @@ class IngestionPipeline:
                         hall_id=hall.id,
                         dedup_key=f"{parse_run.id}:{issue.location}:{issue.code}",
                         details=issue.model_dump(mode="json"),
+                    )
+            # パーサーが品質課題のコード（例: MODEL_LIST_TRUNCATED）で報告したものは issues に出す
+            for issue in result.issues:
+                if issue.code in ISSUE_CODES:
+                    record_issue(
+                        s,
+                        issue.code,
+                        severity=issue.severity,
+                        entity_type="raw_payload",
+                        entity_id=raw.id,
+                        hall_id=hall.id,
+                        dedup_key=f"{raw.id}:{issue.code}:{issue.location or ''}",
+                        details={
+                            **issue.model_dump(mode="json"),
+                            "parser": f"{parser.name}@{parser.version}",
+                        },
                     )
             parse_run.status = ParseStatus.FAILED if failed else ParseStatus.SUCCEEDED
             parse_run.finished_at = utcnow()
@@ -568,12 +584,15 @@ class IngestionPipeline:
         with self.ctx.session() as s:
             current: uuid.UUID | None = run_id
             while current is not None:
-                # 拒否画面などエラー表示を保存しただけの原本は「完了」に数えない（再開時に取り直す）
+                # 拒否画面などエラー表示を保存しただけの原本と、解析に成功していない原本は「完了」に数えない
+                # （再開時に取り直す）。同一内容の再取得（duplicate_content）は元の原本の解析で足りるので完了扱い
+                succeeded = select(ParseRun.raw_payload_id).where(ParseRun.status == ParseStatus.SUCCEEDED)
                 done.update(
                     s.scalars(
                         select(RawPayload.request_fingerprint).where(
                             RawPayload.collection_run_id == current,
                             RawPayload.response_metadata["page_error"].astext.is_(None),
+                            RawPayload.id.in_(succeeded) | RawPayload.duplicate_of_id.is_not(None),
                         )
                     )
                 )

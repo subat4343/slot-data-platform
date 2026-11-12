@@ -636,3 +636,33 @@ def test_persist_failure_keeps_raw_for_reparse(ctx, hall, tmp_path, monkeypatch)
     stats = pipeline.reparse(pending_only=True)
     assert stats["parsed"] == 1
     assert _stat(ctx).total_games == 5
+
+
+def test_auto_resolve_pending_models(ctx, hall, tmp_path):
+    from slot_data.exports.export import ExportFilter, daily_rows
+    from slot_data.services.masters import auto_resolve_pending_models
+
+    with ctx.session() as s:
+        s.add(MachineModel(canonical_name="既存機種"))
+    doc = manual_doc(
+        [
+            {"machine_number": "301", "model_name": "既存機種", "fields": {"total_games": 1}},
+            {"machine_number": "302", "model_name": "新しい機種", "fields": {"total_games": 2}},
+        ]
+    )
+    pipeline = IngestionPipeline(ctx)
+    pipeline.import_file("pscube", "H001", write_doc(tmp_path, "a.json", doc))
+    # 既存機種は自動一致、未知の機種はレビュー待ち。出力には取得元の機種名を出す
+    with ctx.session() as s:
+        rows = {r["machine_number"]: r for r in daily_rows(s, ExportFilter())}
+    assert rows["302"]["model_name"] is None and rows["302"]["source_model_name"] == "新しい機種"
+
+    with ctx.session() as s:
+        counts = auto_resolve_pending_models(s)
+    assert counts == {"pending": 1, "matched_existing": 0, "created": 1, "skipped": 0}
+    pipeline.reconcile_range("H001", D, D)
+    with ctx.session() as s:
+        rows = {r["machine_number"]: r for r in daily_rows(s, ExportFilter())}
+        mapping = s.scalar(select(SourceMapping).where(SourceMapping.external_name == "新しい機種"))
+    assert rows["302"]["model_name"] == "新しい機種"
+    assert mapping.review_status == "auto_matched"

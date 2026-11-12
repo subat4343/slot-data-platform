@@ -34,6 +34,7 @@ from slot_data.schemas.parsed import (
 _DAY_HEADER = re.compile(r"^(本日|(\d+)日前)")
 _UPDATED = re.compile(r"(\d{4})/(\d{1,2})/(\d{1,2})\s+(\d{1,2}):(\d{2})")
 _ERROR = re.compile(r"error\((\d+)\)")
+MODEL_LIST_PAGE_SIZE = 20  # 機種一覧が 1 回に読み込む件数（nc-m03-001.php の page 単位）
 
 
 @dataclass(frozen=True)
@@ -103,14 +104,26 @@ class ModelListParser:
     """機種一覧は巡回の目次で、日次の観測値は含まない。原本として保存し、観測は作らない。"""
 
     name = "pscube_model_list"
-    version = "1.0.0"
+    version = "1.1.0"
 
     def parse(self, data: bytes, ctx: ParseContext) -> ParseResult:
         html = data.decode("utf-8")
         result = ParseResult()
-        if not parse_model_list(html):
+        models = parse_model_list(html)
+        if not models:
             result.issues.append(
                 ParseIssue(code="NO_MODELS", severity=Severity.WARNING, message="機種一覧に機種がありません")
+            )
+        elif len(models) % MODEL_LIST_PAGE_SIZE == 0:
+            # 一覧は 20 件ずつ追加で読み込まれる。件数がちょうど区切りなら、続きを読み込む前に保存した可能性がある
+            total = sum(m.machine_count or 0 for m in models)
+            result.issues.append(
+                ParseIssue(
+                    code="MODEL_LIST_TRUNCATED",
+                    severity=Severity.WARNING,
+                    message=f"機種一覧が {len(models)} 件（{MODEL_LIST_PAGE_SIZE} 件の区切り）、台数合計 {total}。"
+                    "続きが読み込まれていない可能性があります",
+                )
             )
         return result
 

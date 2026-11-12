@@ -161,6 +161,36 @@ def mapping_list(
         )
 
 
+@mapping_app.command("auto-resolve")
+def mapping_auto_resolve(
+    source: Annotated[list[str] | None, typer.Option(help="対象の取得元（複数可。省略時はすべて）")] = None,
+    reconcile_hall: Annotated[
+        str | None, typer.Option("--reconcile-hall", help="解決後に、この店舗の観測がある全期間を再照合する")
+    ] = None,
+) -> None:
+    """レビュー待ちの機種対応を一括で解決する（同名の機種があれば対応付け、無ければ取得元の機種名で作成）。"""
+    from sqlalchemy import func
+
+    from slot_data.ingestion.pipeline import IngestionPipeline
+    from slot_data.models import SourceObservation
+    from slot_data.services.masters import auto_resolve_pending_models, get_hall
+
+    ctx = _ctx()
+    with ctx.session() as s:
+        result: dict = {"mappings": auto_resolve_pending_models(s, source)}
+    if reconcile_hall:
+        with ctx.session() as s:
+            hall_id = get_hall(s, reconcile_hall).id
+            first, last = s.execute(
+                select(
+                    func.min(SourceObservation.business_date), func.max(SourceObservation.business_date)
+                ).where(SourceObservation.hall_id == hall_id)
+            ).one()
+        if first is not None:
+            result["reconcile"] = IngestionPipeline(ctx).reconcile_range(reconcile_hall, first, last)
+    _echo(result)
+
+
 @mapping_app.command("resolve")
 def mapping_resolve(
     mapping_id: uuid.UUID,

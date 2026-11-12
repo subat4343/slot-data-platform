@@ -41,6 +41,7 @@ ISSUE_CODES: dict[str, tuple[Severity, str]] = {
     "RAW_ORPHAN_FILE": (Severity.INFO, "DB から参照されない原本ファイル"),
     "RAW_UNPARSED": (Severity.WARNING, "解析されていない原本"),
     "INSTALLATION_OVERLAP": (Severity.CRITICAL, "設置期間が重複"),
+    "MODEL_LIST_TRUNCATED": (Severity.WARNING, "機種一覧が途中までしか取得できていない可能性"),
 }
 
 

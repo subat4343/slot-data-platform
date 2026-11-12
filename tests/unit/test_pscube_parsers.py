@@ -43,7 +43,9 @@ def test_model_list():
     assert first.href.startswith("nc-v05-003.php?")
     assert any(m.bai == "5.319" for m in models)  # 5 円スロ
     result = ModelListParser().parse(_read("model_list.html").encode(), CTX)
-    assert result.observations == [] and result.issues == []
+    # このフィクスチャは追加読み込み前の 20 件で切れた状態（2026-11-12 のレビューで判明）
+    assert result.observations == []
+    assert [i.code for i in result.issues] == ["MODEL_LIST_TRUNCATED"]
 
 
 def test_model_page_daily_bonus_counts():
@@ -143,3 +145,17 @@ def test_all_adapter_parsers_are_registered_for_reparse():
     for parser in parsers:
         registered = get_parser(parser.name)
         assert type(registered) is type(parser) and registered.version == parser.version
+
+
+def test_next_deadline():
+    from slot_data.adapters.pscube import next_deadline
+
+    jst = ZoneInfo("Asia/Tokyo")
+    # 23:30 開始 → 翌日 04:45、07:29 開始 → 翌日 04:45、03:00 開始 → 当日 04:45
+    assert next_deadline(datetime(2026, 11, 12, 23, 30, tzinfo=jst), time(4, 45)) == datetime(
+        2026, 11, 13, 4, 45, tzinfo=jst
+    )
+    assert next_deadline(datetime(2026, 11, 12, 7, 29, tzinfo=jst), time(4, 45)).day == 13
+    assert next_deadline(datetime(2026, 11, 13, 3, 0, tzinfo=jst), time(4, 45)) == datetime(
+        2026, 11, 13, 4, 45, tzinfo=jst
+    )

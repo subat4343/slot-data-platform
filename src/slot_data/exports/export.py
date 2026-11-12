@@ -61,10 +61,18 @@ def _apply(stmt: Select, f: ExportFilter, hall_col, date_col, machine_col, model
 
 def daily_rows(session: Session, f: ExportFilter, with_layout: bool = False) -> Iterator[dict[str, Any]]:
     stmt = (
-        select(DailyMachineStat, Hall.code, Hall.id, MachineModel.canonical_name, Source.code)
+        select(
+            DailyMachineStat,
+            Hall.code,
+            Hall.id,
+            MachineModel.canonical_name,
+            Source.code,
+            SourceObservation.source_model_name,
+        )
         .join(Hall, Hall.id == DailyMachineStat.hall_id)
         .outerjoin(MachineModel, MachineModel.id == DailyMachineStat.model_id)
         .outerjoin(Source, Source.id == DailyMachineStat.selected_source_id)
+        .outerjoin(SourceObservation, SourceObservation.id == DailyMachineStat.selected_observation_id)
         .order_by(Hall.code, DailyMachineStat.business_date, DailyMachineStat.machine_number)
     )
     stmt = _apply(
@@ -76,7 +84,7 @@ def daily_rows(session: Session, f: ExportFilter, with_layout: bool = False) -> 
         MachineModel.canonical_name,
     )
     layout_cache: dict[tuple[uuid.UUID, date], dict] = {}
-    for stat, hall_code, hall_id, model_name, source_code in session.execute(stmt):
+    for stat, hall_code, hall_id, model_name, source_code, source_model_name in session.execute(stmt):
         day = stat.business_date
         row: dict[str, Any] = {
             "hall_code": hall_code,
@@ -84,7 +92,8 @@ def daily_rows(session: Session, f: ExportFilter, with_layout: bool = False) -> 
             "weekday": WEEKDAYS_JA[day.weekday()],
             "holiday_name": jpholiday.is_holiday_name(day),
             "machine_number": stat.machine_number,
-            "model_name": model_name,
+            "model_name": model_name,  # 内部機種（対応付け済みの場合のみ）
+            "source_model_name": source_model_name,  # 採用した観測の取得元での機種名（原文）
         }
         for name in METRIC_NAMES:
             row[name] = getattr(stat, name)

@@ -167,6 +167,46 @@ def resolve_model(
     return None
 
 
+def auto_resolve_pending_models(session: Session, source_codes: list[str] | None = None) -> dict[str, int]:
+    """レビュー待ちの機種対応を一括で解決する。
+
+    正規化名が一致する機種がちょうど 1 件あればそれに対応付け、無ければ取得元の機種名で新しい機種を作る。
+    どちらも review_status は auto_matched（人の確認前）とし、後から resolve で付け替えられる。
+    """
+    stmt = select(SourceMapping).where(
+        SourceMapping.entity_type == "machine_model", SourceMapping.review_status == ReviewStatus.PENDING
+    )
+    if source_codes:
+        stmt = stmt.join(Source, Source.id == SourceMapping.source_id).where(Source.code.in_(source_codes))
+    counts = {"pending": 0, "matched_existing": 0, "created": 0, "skipped": 0}
+    models = {m.id: m for m in session.scalars(select(MachineModel))}
+    for mapping in session.scalars(stmt).all():
+        counts["pending"] += 1
+        name = mapping.external_name
+        if not name:
+            counts["skipped"] += 1
+            continue
+        key = normalize_model_name(name)
+        candidates = [m for m in models.values() if normalize_model_name(m.canonical_name) == key]
+        if len(candidates) == 1:
+            model = candidates[0]
+            counts["matched_existing"] += 1
+        elif not candidates:
+            model = MachineModel(canonical_name=name)
+            session.add(model)
+            session.flush()
+            models[model.id] = model
+            counts["created"] += 1
+        else:
+            counts["skipped"] += 1  # 同名の機種が複数あり曖昧
+            continue
+        mapping.internal_entity_id = model.id
+        mapping.review_status = ReviewStatus.AUTO_MATCHED
+        mapping.confidence = Decimal("0.8")
+    session.flush()
+    return counts
+
+
 def resolve_pending_mapping(
     session: Session,
     mapping_id: uuid.UUID,

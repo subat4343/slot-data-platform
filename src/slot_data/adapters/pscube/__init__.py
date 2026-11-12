@@ -14,8 +14,9 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import date
+from datetime import date, datetime, time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from slot_data.adapters.base import (
     CrawlingAdapter,
@@ -53,6 +54,33 @@ class PageError(RuntimeError):
         self.kind = "access_denied" if code == 451 else "page_error"
 
 
+class WrongPageError(RuntimeError):
+    """クリックしたのに期待した画面へ遷移していない（遷移前の画面を保存しないために使う）。"""
+
+    kind = "wrong_page"
+
+    def __init__(self, expected: str, url: str) -> None:
+        super().__init__(f"expected {expected} but at {url}")
+
+
+class DeadlineReached(RuntimeError):
+    """営業日の区切りまでに終わらせるための打ち切り時刻に達した。"""
+
+    kind = "deadline"
+
+
+# 店の営業日の区切り（05:00）までに終えるための打ち切り時刻（店舗ローカル）。options.deadline で変更できる
+DEFAULT_DEADLINE = time(4, 45)
+DEADLINE_TZ = ZoneInfo("Asia/Tokyo")
+
+
+def next_deadline(start: datetime, at: time) -> datetime:
+    """start より後で最初に来る at（店舗ローカル時刻）。"""
+    local = start.astimezone(DEADLINE_TZ)
+    candidate = datetime.combine(local.date(), at, tzinfo=DEADLINE_TZ)
+    return candidate if candidate > local else candidate + timedelta(days=1)
+
+
 class PsCubeAdapter(CrawlingAdapter):
     source_code = "pscube"
     adapter_version = "0.2.0-ptown-browser"
@@ -70,6 +98,11 @@ class PsCubeAdapter(CrawlingAdapter):
     @property
     def crawl_details(self) -> bool:
         return bool(self.config.options.get("crawl_details", True))
+
+    @property
+    def deadline_time(self) -> time:
+        value = self.config.options.get("deadline")
+        return time.fromisoformat(value) if value else DEFAULT_DEADLINE
 
     def open_client(self) -> Navigator:
         self.ensure_automated_fetch_allowed()
@@ -94,6 +127,7 @@ class PsCubeAdapter(CrawlingAdapter):
         nav: Navigator = client
         day = max(business_dates)
         start = self.start_url(target)
+        deadline = next_deadline(utcnow(), self.deadline_time)
 
         def request(kind: str, url: str, machine: str | None = None) -> FetchRequest:
             return FetchRequest(
@@ -118,12 +152,20 @@ class PsCubeAdapter(CrawlingAdapter):
                 list_req, ModelListParser(), snapshot("model_list", list_html), source_code=LIST_SOURCE
             )
 
+        def past_deadline() -> bool:
+            return utcnow() >= deadline
+
         details_blocked = False
         for model in parse_model_list(list_html):
             model_req = request("model_page", model.href)
             model_done = model_req.fingerprint() in skip
             if model_done and (not self.crawl_details or details_blocked):
                 continue
+            if past_deadline():
+                yield CrawlStep(
+                    model_req, None, failure=DeadlineReached(f"stopped at deadline {deadline.isoformat()}")
+                )
+                return
             nav.click(f"{MODEL_LINK}[href='{model.href}']", ready_selector=MACHINE_LINK)
             html = nav.html()
             code = page_error_code(html)
@@ -143,7 +185,19 @@ class PsCubeAdapter(CrawlingAdapter):
                     detail_req = request("machine_detail", href, number)
                     if detail_req.fingerprint() in skip:
                         continue
+                    if past_deadline():
+                        yield CrawlStep(
+                            detail_req,
+                            None,
+                            failure=DeadlineReached(f"stopped at deadline {deadline.isoformat()}"),
+                        )
+                        return
                     nav.click(f"{MACHINE_LINK}[href='{href}']", ready_any=DETAIL_READY)
+                    expected = f"nc-v06-001.php?cd_dai={number}"
+                    if expected not in nav.url():
+                        # 遷移していない画面を台詳細として保存しない。この機種の残りは飛ばして機種一覧へ戻る
+                        yield CrawlStep(detail_req, None, failure=WrongPageError(expected, nav.url()))
+                        break
                     detail_html = nav.html()
                     detail_code = page_error_code(detail_html)
                     # 拒否画面も証跡として原本保存し、失敗として記録する
