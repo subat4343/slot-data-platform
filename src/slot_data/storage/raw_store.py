@@ -12,12 +12,14 @@ import gzip
 import hashlib
 import os
 import tempfile
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 URI_SCHEME = "rawstore://"
+VERIFY_ATTEMPTS = 5
 
 
 class RawStoreError(Exception):
@@ -95,7 +97,13 @@ class LocalRawStore:
                 if not path.exists():
                     raise
                 os.remove(tmp_name)
-            if not self.verify(uri, digest):
+            # 同じ内容を並行して書いた別スレッドの置き換えと重なると、Windows では読み取りが一時的に失敗する。
+            # 書き込み前の一時ファイルは検証済みなので、置き換え後の確認は短い間隔で数回試す
+            for attempt in range(VERIFY_ATTEMPTS):
+                if self.verify(uri, digest):
+                    break
+                time.sleep(0.05 * (attempt + 1))
+            else:
                 raise RawIntegrityError(f"raw object failed verification after write: {uri}")
         except BaseException:
             if os.path.exists(tmp_name):
