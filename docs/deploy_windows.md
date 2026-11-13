@@ -62,6 +62,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\register-tasks.ps1
 - 実行中に次の回が来た場合は、新しい回を起動しません。5 時間 30 分（23:30 開始で 05:00）を超えたら打ち切ります。巡回自体も 04:45 に打ち切り、`FETCH_FAILED`（kind=deadline）を記録します。
 - 実行上限を変更した版に更新したときは、`register-tasks.ps1` を実行し直してタスクを登録し直してください。
 
+### 4.1 PostgreSQL を Windows サービスにする（推奨）
+
+開発用 PostgreSQL は、ほかのアプリやセッションの終了に巻き込まれて止まることがあります（2026-11 に 2 回発生）。
+管理者の PowerShell で次を実行すると、Windows サービス「slot-data-postgres」として PC 起動時に自動で起動します。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev-postgres.ps1 register-service
+powershell -NoProfile -ExecutionPolicy Bypass -File scriptsegister-tasks.ps1   # ログオン時の起動タスクを外す
+```
+
+元に戻すときは `dev-postgres.ps1 unregister-service` を実行し、`register-tasks.ps1` を実行し直します。
+
 ## 5. 結果の確認
 
 | 確認したいこと | 方法 |

@@ -135,8 +135,15 @@ class CrawlingAdapter(SourceAdapter):
 
     @abstractmethod
     def crawl(
-        self, target: CollectTarget, business_dates: list[date], client: Any, skip: set[str]
-    ) -> Iterator[CrawlStep]: ...
+        self,
+        target: CollectTarget,
+        business_dates: list[date],
+        client: Any,
+        skip: set[str],
+        hints: dict[str, Any] | None = None,
+    ) -> Iterator[CrawlStep]:
+        """hints: パイプラインが渡す補助情報（resume_after: 再開時の取得済みの最後の台、known_min_machine など）。"""
+        ...
 
 
 def ensure_allowed(source_code: str, policy: AccessPolicy) -> None:

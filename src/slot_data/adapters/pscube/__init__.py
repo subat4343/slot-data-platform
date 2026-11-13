@@ -50,10 +50,21 @@ NEXT_MACHINE = (
     "#dai_next"  # 台詳細の「次台 >>」（ホール全体の台番号順。URL は変わらず画面の中身が切り替わる）
 )
 PREV_MACHINE = "#dai_prev"  # 台詳細の「<< 前台」
+MAX_NEXT_RECOVERIES = 2  # 「次台 >>」が効かないときに検索で開き直す回数の上限（1 回の巡回あたり）
+DEFAULT_FIRST_MACHINE = "0001"  # 台詳細の巡回を始める台番号（options.first_machine で変更できる）
 # 機種一覧の追加読み込み（スクロール）の間隔（秒）と回数の上限。options.list_scroll_interval で変更できる
 DEFAULT_LIST_SCROLL_INTERVAL = 10.0
 MAX_LIST_ROUNDS = 20
 _MACHINE_IN_URL = re.compile(r"nc-v06-001\.php\?cd_dai=([0-9A-Za-z-]+)")
+
+
+def search_number(number: str) -> str:
+    """検索欄に入れる台番号（数字だけなら 4 桁にゼロ埋め。画面の表示「0001」に合わせる）。"""
+    return number.zfill(4) if number.isdigit() else number
+
+
+def same_machine(a: str, b: str) -> bool:
+    return (int(a) == int(b)) if a.isdigit() and b.isdigit() else a == b
 
 
 def machine_in_url(url: str) -> str | None:
@@ -77,6 +88,15 @@ class WrongPageError(RuntimeError):
         super().__init__(f"expected {expected} but at {url}")
 
 
+class SearchFailedError(RuntimeError):
+    """「台番号で探す」で台詳細を開けなかった。"""
+
+    kind = "search_failed"
+
+    def __init__(self, numbers: str) -> None:
+        super().__init__(f"could not open machine detail by search: {numbers}")
+
+
 class DeadlineReached(RuntimeError):
     """営業日の区切りまでに終わらせるための打ち切り時刻に達した。"""
 
@@ -97,7 +117,7 @@ def next_deadline(start: datetime, at: time) -> datetime:
 
 class PsCubeAdapter(CrawlingAdapter):
     source_code = "pscube"
-    adapter_version = "0.3.0-ptown-next-machine"
+    adapter_version = "0.4.0-ptown-search-next"
 
     def parser_for(self, request_kind: str, content_type: str) -> Parser:
         parsers = {
@@ -130,17 +150,29 @@ class PsCubeAdapter(CrawlingAdapter):
         return PTOWN_URL.format(shop=target.source_hall_id.strip("/"))
 
     @property
+    def first_machine(self) -> str:
+        return str(self.config.options.get("first_machine", DEFAULT_FIRST_MACHINE))
+
+    @property
     def list_scroll_interval(self) -> float:
         return float(self.config.options.get("list_scroll_interval", DEFAULT_LIST_SCROLL_INTERVAL))
 
     def crawl(
-        self, target: CollectTarget, business_dates: list[date], client: Any, skip: set[str]
+        self,
+        target: CollectTarget,
+        business_dates: list[date],
+        client: Any,
+        skip: set[str],
+        hints: dict[str, Any] | None = None,
     ) -> Iterator[CrawlStep]:
         """ぱちタウン店舗ページ → スロットデータ（一覧を最後までスクロール）→ 台詳細を「次台 >>」で順に辿る。
 
         - 機種一覧は 20 件ずつ追加で読み込まれるため、最後までスクロールして全件を読み込んでから保存する
-        - 台詳細は、先頭の機種の先頭の台から「次台 >>」でホール全体を台番号順に進む（1 台につき画面遷移 1 回）。
-          最後の台で止まった場合は、開始台に戻って「<< 前台」方向も辿り、開始台より前の台を取りこぼさない
+        - 台詳細は、画面の「台番号で探す」欄で先頭の台（options.first_machine、既定 0001）を開き、「次台 >>」だけで
+          台番号の昇順に最後の台まで進む（1 台につき画面遷移 1 回。ADR-0014）。開けなければ前回までの最小の台番号
+          （hints.known_min_machine）で検索し直し、それでも開けなければ先頭の機種の先頭の台から入る
+        - 「次台 >>」が効かないときは、現在の台を検索で開き直して続ける（1 回の巡回で 2 回まで）
+        - 再開（--resume）では、取得済みの最後の台（hints.resume_after）を検索で開き、そこから続ける
         - crawl_details が false のときは、従来どおり機種画面（日別 BONUS 回数）を機種ごとに開く
         - 画面の「本日」は実行時点の営業日なので、business_dates の最終日を取得日のラベルに使う
         - 台詳細で error(451) などが出たら、その回の台詳細巡回は打ち切る（再試行しない）
@@ -207,14 +239,25 @@ class PsCubeAdapter(CrawlingAdapter):
                 nav.click(SLOT_DATA_LINK, has_text="機種一覧", ready_selector=MODEL_LINK)
             return
 
-        # ---- 台詳細を「次台 >>」で辿る -------------------------------------------
-        first_model = models[0]
+        # ---- 台詳細: 台番号検索で先頭の台を開き、「次台 >>」だけで最後まで進む ----------------
         seen: set[str] = set()
-        limit = sum(m.machine_count or 0 for m in models) * 2 + 50  # 想定外のループを防ぐ上限
-        state = {"blocked": False}
+        expected = sum(m.machine_count or 0 for m in models)
+        limit = expected * 2 + 50  # 想定外のループを防ぐ上限
+        state = {"blocked": False, "recoveries": MAX_NEXT_RECOVERIES}
+
+        def open_by_search(number: str) -> Iterator[CrawlStep]:
+            """画面の「台番号で探す」欄で台番号を検索して台詳細を開く。開けた台番号を返す（開けなければ None）。"""
+            if past_deadline():
+                yield deadline_step(request("machine_detail", "search", number))
+                return None
+            got = nav.search_machine(search_number(number))
+            if got is not None and same_machine(got, number):
+                return got
+            return None
 
         def open_start_machine() -> Iterator[CrawlStep]:
-            """先頭の機種の機種画面を開き、先頭の台の台詳細を開く。開始台の台番号を返す（失敗時 None）。"""
+            """検索で開けなかった場合の入口: 先頭の機種の機種画面から先頭の台を開く。"""
+            first_model = models[0]
             model_req = request("model_page", first_model.href)
             if past_deadline():
                 yield deadline_step(model_req)
@@ -222,7 +265,7 @@ class PsCubeAdapter(CrawlingAdapter):
             nav.click(f"{MODEL_LINK}[href='{first_model.href}']", ready_selector=MACHINE_LINK)
             html = nav.html()
             code = page_error_code(html)
-            if model_req.fingerprint() not in skip and not seen:
+            if model_req.fingerprint() not in skip:
                 yield CrawlStep(
                     model_req,
                     ModelPageParser(),
@@ -255,7 +298,7 @@ class PsCubeAdapter(CrawlingAdapter):
             html = nav.html()
             code = page_error_code(html)
             result = snapshot("machine_detail", html)
-            result.response_metadata["machine_number"] = number  # URL は開始台のまま変わらないため
+            result.response_metadata["machine_number"] = number  # 「次台 >>」では URL が変わらないため
             # 拒否画面も証跡として原本保存し、失敗として記録する
             yield CrawlStep(
                 detail_req,
@@ -266,26 +309,43 @@ class PsCubeAdapter(CrawlingAdapter):
             if code:
                 state["blocked"] = True
 
-        def walk(button: str, current: str) -> Iterator[CrawlStep]:
-            """button（次台 / 前台）を押し続けて台詳細を保存する。終わった理由を返す。"""
+        def recover(current: str) -> Iterator[CrawlStep]:
+            """「次台 >>」が効かないとき、現在の台を検索で開き直す（1 回の巡回で MAX_NEXT_RECOVERIES 回まで）。"""
+            if state["recoveries"] <= 0:
+                return False
+            state["recoveries"] -= 1
+            got = yield from open_by_search(current)
+            return got is not None
+
+        def walk(current: str) -> Iterator[CrawlStep]:
+            """「次台 >>」を押し続けて台詳細を保存する。終わった理由を返す。"""
             while len(seen) < limit:
                 if past_deadline():
                     yield deadline_step(request("machine_detail", "nc-v06-001.php", None))
                     return "deadline"
-                if not nav.exists(button):
+                if not nav.exists(NEXT_MACHINE):
                     return "end"
-                nav.click(button, ready_any=DETAIL_READY, expect_machine_change=True)
-                # 「次台 >>」は URL を変えないので、表示中の台番号で判断する
+                try:
+                    nav.click(NEXT_MACHINE, ready_any=DETAIL_READY, expect_machine_change=True)
+                except Exception:
+                    # 画面の状態がおかしくなった（タイムアウトなど）。現在の台を検索で開き直して続ける
+                    if (yield from recover(current)):
+                        continue
+                    raise
                 number = nav.current_machine()
-                if number is None:
-                    yield CrawlStep(
-                        request("machine_detail", "nc-v06-001.php", None),
-                        None,
-                        failure=WrongPageError("nc-v06-001.php?cd_dai=<番号>", nav.url()),
-                    )
-                    return "stuck"
-                if number == current:
-                    return "end"  # 押しても台が変わらない（端に達した）
+                if number is None or number == current:
+                    # 台が変わらない: 最後の台に達したか、「次台 >>」が効かなくなった。
+                    # まだ想定台数に届いていなければ、現在の台を検索で開き直してもう一度だけ押す
+                    if len(seen) < expected and (yield from recover(current)):
+                        continue
+                    if number is None:
+                        yield CrawlStep(
+                            request("machine_detail", "nc-v06-001.php", None),
+                            None,
+                            failure=WrongPageError("nc-v06-001.php?cd_dai=<番号>", nav.url()),
+                        )
+                        return "stuck"
+                    return "end"
                 if number in seen:
                     return "wrapped"  # 一周した
                 seen.add(number)
@@ -295,17 +355,42 @@ class PsCubeAdapter(CrawlingAdapter):
                 current = number
             return "limit"
 
-        start_number = yield from open_start_machine()
-        if start_number is None:
+        resume_after = (hints or {}).get("resume_after")
+        if resume_after:
+            # 再開: 取得済みの最後の台を検索で開き、そこから「次台 >>」で続ける（取得済みの区間はたどり直さない）
+            current = yield from open_by_search(resume_after)
+            if current is None:
+                yield CrawlStep(
+                    request("machine_detail", "search", resume_after),
+                    None,
+                    failure=SearchFailedError(resume_after),
+                )
+                return
+            seen.add(current)
+            yield from walk(current)
             return
-        seen.add(start_number)
-        yield from save_detail(start_number)
+
+        current = None
+        candidates = [self.first_machine]
+        known_min = (hints or {}).get("known_min_machine")
+        if known_min and not same_machine(known_min, self.first_machine):
+            candidates.append(known_min)
+        for candidate in candidates:
+            current = yield from open_by_search(candidate)
+            if current is not None:
+                break
+        if current is None:
+            # 検索で開けなかった。記録を残し、先頭の機種の先頭の台から「次台 >>」方向だけを辿る
+            yield CrawlStep(
+                request("machine_detail", "search", candidates[0]),
+                None,
+                failure=SearchFailedError(", ".join(candidates)),
+            )
+            current = yield from open_start_machine()
+            if current is None:
+                return
+        seen.add(current)
+        yield from save_detail(current)
         if state["blocked"]:
             return
-        reason = yield from walk(NEXT_MACHINE, start_number)
-        if reason == "end":
-            # 最後の台で止まった。開始台より前の台を取りこぼさないよう、開始台に戻って前台方向にも辿る
-            nav.click(SLOT_DATA_LINK, has_text="機種一覧", ready_selector=MODEL_LINK)
-            again = yield from open_start_machine()
-            if again == start_number:
-                yield from walk(PREV_MACHINE, start_number)
+        yield from walk(current)

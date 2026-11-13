@@ -33,6 +33,7 @@ class FakeNavigator:
     """クリックされたセレクターに応じて保存済み HTML を返す。操作履歴を記録する。
 
     台詳細は「次台 >>」「<< 前台」で hall_order の順に移る（端で止まる。wrap=True なら一周する）。
+    「台番号で探す」は hall_order にある台番号なら台詳細を開き、無ければ画面を変えない。
     台詳細の HTML は、フィクスチャの台番号 0277 を表示中の台番号に置き換えて返す。
     """
 
@@ -81,6 +82,13 @@ class FakeNavigator:
             self.pages["list"] = self.full_list
         return len(BeautifulSoup(self.pages["list"], "html.parser").select("ul#ulKI li a.btn-ki"))
 
+    def search_machine(self, number):
+        self.log.append(f"search {number}")
+        found = next((m for m in self.hall_order if int(m) == int(number)), None)
+        if found is not None:
+            self.current, self.machine = "detail", found
+        return self.current_machine()
+
     def current_machine(self):
         return self.machine if self.current == "detail" else None
 
@@ -112,7 +120,7 @@ def _adapter(**options) -> PsCubeAdapter:
             name="P's CUBE",
             access_policy=AccessPolicy(automated_fetch="permitted", permission_reference="test"),
             rate_limit=RateLimitConfig(min_interval_seconds=30),
-            options={"headless": False, "crawl_details": True, **options},
+            options={"headless": False, "crawl_details": True, "first_machine": "0277", **options},
         )
     )
 
@@ -128,27 +136,17 @@ def test_crawl_order_and_blocked_detail_then_resume(ctx, hall):
 
     assert nav.log[0] == "open https://p-town.dmm.com/shops/kanagawa/13152/jackpot"
     assert nav.log[1].startswith("click a[href*='nc-v03-001.php']")
-    assert any("btn-dai" in entry and "0277" in entry for entry in nav.log)
+    assert "search 0277" in nav.log  # 台番号検索で開始台を開く
     # 台詳細が拒否されたら残りの台（0278, 0280）は巡回しない
     assert not any("0278" in entry for entry in nav.log)
     assert first.status == "partial"
     assert first.counts["fetch_failed"] == 1
 
     with ctx.session() as s:
-        # 機種画面の日別 BONUS 回数は pscube_list として採用値になる
-        stats = s.scalars(select(DailyMachineStat)).all()
-        assert len(stats) == 15
-        today = s.scalar(
-            select(DailyMachineStat).where(
-                DailyMachineStat.machine_number == "277", DailyMachineStat.business_date == date(2026, 10, 23)
-            )
-        )
-        assert today.bonus_count == 39 and today.bb_count is None
-        assert today.field_status["bb_count"] == "not_published"
-        list_source = s.scalar(select(Source).where(Source.code == "pscube_list"))
-        assert today.selected_source_id == list_source.id
-        # 拒否画面も証跡として原本保存し、欠損理由を記録
-        assert s.scalar(select(func.count()).select_from(RawPayload)) == 3
+        # 機種画面は開かず（検索で台詳細を開く）、台詳細は拒否されたので日次データは作られない
+        assert s.scalar(select(func.count()).select_from(DailyMachineStat)) == 0
+        # 拒否画面も証跡として原本保存し（機種一覧 + 拒否された台詳細）、欠損理由を記録
+        assert s.scalar(select(func.count()).select_from(RawPayload)) == 2
         issue = s.scalar(select(DataQualityIssue).where(DataQualityIssue.issue_code == "FETCH_FAILED"))
         assert issue.machine_number == "0277" and issue.details["kind"] == "access_denied"
 
@@ -158,7 +156,7 @@ def test_crawl_order_and_blocked_detail_then_resume(ctx, hall):
     assert resumed.counts["pages"] == 1
     assert any("0277" in entry for entry in nav2.log)
     with ctx.session() as s:
-        assert s.scalar(select(func.count()).select_from(SourceObservation)) == 15
+        assert s.scalar(select(func.count()).select_from(SourceObservation)) == 0
 
 
 def test_crawl_without_details_and_refuses_without_permission(ctx, hall):
@@ -187,16 +185,15 @@ def test_crawl_with_detail_prefers_detail_values(ctx, hall):
         _adapter(), TARGET.model_copy(update={"machines": ["0277"]}), [date(2026, 10, 25)], nav
     )
     assert summary.status == "succeeded", summary.errors
-    # 一覧を最後までスクロールし、先頭の台から「次台 >>」で進む。端で止まったら機種一覧へ戻り、前台方向も辿る
+    # 一覧を最後までスクロールし、検索で開始台を開いて「次台 >>」だけで進む（端で止まったら終わり）
     assert nav.log[2].startswith("scroll a.btn-ki every 10.0s")
-    assert [e for e in nav.log if "dai_" in e or "機種一覧" in e] == [
+    assert [e for e in nav.log if "dai_" in e or "機種一覧" in e or e.startswith("search")] == [
+        "search 0277",
         "click #dai_next",
         "click #dai_next",
         "click #dai_next",
-        "click a[href*='nc-v03-001.php'] 機種一覧",
-        "click #dai_prev",
     ]
-    assert not any("機種データ" in e for e in nav.log)
+    assert not any("機種データ" in e or "btn-ki" in e.split(" ")[1] for e in nav.log if e.startswith("click"))
     with ctx.session() as s:
         pscube = s.scalar(select(Source).where(Source.code == "pscube"))
 
@@ -214,16 +211,8 @@ def test_crawl_with_detail_prefers_detail_values(ctx, hall):
         # 機種画面と重なる日は台詳細（優先度が高い）を採用し、BONUS 回数の差は不一致として記録
         d23 = stat(date(2026, 10, 23))
         assert d23.selected_source_id == pscube.id and d23.bb_count == 32
-        # 機種画面にしかない台（0278）は機種画面の値
-        assert (
-            s.scalar(
-                select(DailyMachineStat.bonus_count).where(
-                    DailyMachineStat.machine_number == "278",
-                    DailyMachineStat.business_date == date(2026, 10, 23),
-                )
-            )
-            == 24
-        )
+        # 対象外の台（0278）は辿るだけで保存しない
+        assert s.scalar(select(func.count()).where(DailyMachineStat.machine_number == "278")) == 0
         # 特賞履歴（本日分）も保存
         from slot_data.models import BonusEvent
 
@@ -232,12 +221,8 @@ def test_crawl_with_detail_prefers_detail_values(ctx, hall):
 
 def test_crawl_abort_is_recorded_as_issue(ctx, hall):
     class BrokenNavigator(FakeNavigator):
-        def click(
-            self, selector, ready_selector=None, has_text=None, ready_any=(), expect_machine_change=False
-        ):
-            if "btn-dai" in selector:
-                raise RuntimeError("browser crashed")
-            super().click(selector, ready_selector, has_text, ready_any, expect_machine_change)
+        def search_machine(self, number):
+            raise RuntimeError("browser crashed")
 
     nav = BrokenNavigator("<html></html>")
     summary = IngestionPipeline(ctx).collect(_adapter(), TARGET, [date(2026, 10, 23)], nav)
@@ -312,6 +297,10 @@ def test_detail_click_that_does_not_navigate_is_not_saved(ctx, hall):
     """台番号をクリックしても台詳細に遷移しなかった場合、遷移前の画面を台詳細として保存しない。"""
 
     class StuckNavigator(FakeNavigator):
+        def search_machine(self, number):
+            self.log.append(f"search {number}")
+            return None  # 検索しても台詳細が開かない
+
         def click(
             self, selector, ready_selector=None, has_text=None, ready_any=(), expect_machine_change=False
         ):
@@ -332,8 +321,12 @@ def test_detail_click_that_does_not_navigate_is_not_saved(ctx, hall):
     with ctx.session() as s:
         kinds = [r.response_metadata.get("page_kind") for r in s.scalars(select(RawPayload))]
         assert "machine_detail" not in kinds
-        issue = s.scalar(select(DataQualityIssue).where(DataQualityIssue.issue_code == "FETCH_FAILED"))
-        assert issue.details["kind"] == "wrong_page" and issue.machine_number == "0277"
+        kinds = {
+            i.details["kind"]: i
+            for i in s.scalars(select(DataQualityIssue).where(DataQualityIssue.issue_code == "FETCH_FAILED"))
+        }
+        # 検索で開けず（search_failed）、機種画面から入ろうとしたが遷移しなかった（wrong_page）
+        assert set(kinds) == {"search_failed", "wrong_page"} and kinds["wrong_page"].machine_number == "0277"
 
 
 def test_crawl_stops_at_deadline(ctx, hall, monkeypatch):
@@ -370,7 +363,7 @@ def test_resume_retries_raws_that_failed_to_parse(ctx, hall, monkeypatch):
 
     nav = FakeNavigator(detail)
     resumed = pipeline.collect(_adapter(), target, [date(2026, 10, 25)], nav, resume_run_id=first.run_id)
-    assert any("cd_dai=0277" in e for e in nav.log)  # 取り直した
+    assert "search 0277" in nav.log  # 解析に失敗した台は取得済みとみなさず、取り直した
     assert resumed.counts["parse_failed"] == 0
 
 
@@ -407,19 +400,24 @@ def test_full_traversal_with_next_machine(ctx, hall):
     """一覧をスクロールして全件読み込み、先頭の台から「次台 >>」でホール全体を 1 台 1 遷移で辿る。"""
     detail = (D / "machine_detail_0277.html").read_text(encoding="utf-8")
     nav = FakeNavigator(
-        detail, hall_order=["0101", "0277", "0278", "0280"], full_list=_list_with_extra_model()
+        detail, hall_order=["0001", "0101", "0277", "0278", "0280"], full_list=_list_with_extra_model()
     )
-    summary = IngestionPipeline(ctx).collect(_adapter(), TARGET, [date(2026, 10, 25)], nav)
+    summary = IngestionPipeline(ctx).collect(
+        _adapter(first_machine="0001"), TARGET, [date(2026, 10, 25)], nav
+    )
     assert summary.status == "succeeded", summary.errors
-    # 開始台（先頭の機種の先頭の台 0277）から次台で 0280 まで進み、端で止まったら戻って前台で 0101 を取る
-    assert [e.split("cd_dai=")[-1] for e in nav.log if "btn-dai" in e] == ["0277']", "0277']"]
+    # 検索で 0001 を開き、「次台 >>」だけで最後の台（0280）まで進む。機種画面・前台・機種一覧へは戻らない
+    # 0001 を検索で開き、「次台 >>」で 0280 まで進む。一覧の台数合計（80 台）に届かないまま端で止まったので、
+    # 「次台 >>」が効かなくなった可能性を考えて 0280 を検索で開き直して押し直す（上限 2 回）
+    assert [e for e in nav.log if e.startswith("search")] == ["search 0001", "search 0280", "search 0280"]
+    assert not any("btn-dai" in e or "dai_prev" in e or "機種一覧" in e for e in nav.log)
     with ctx.session() as s:
         details = [
             r.request_fingerprint
             for r in s.scalars(select(RawPayload))
             if r.response_metadata.get("page_kind") == "machine_detail"
         ]
-        assert len(details) == 4
+        assert len(details) == 5
         machines = set(
             s.scalars(
                 select(DailyMachineStat.machine_number).where(
@@ -427,7 +425,7 @@ def test_full_traversal_with_next_machine(ctx, hall):
                 )
             )
         )
-        assert machines == {"101", "277", "278", "280"}
+        assert machines == {"1", "101", "277", "278", "280"}
         # 全件表示後の一覧（21 件）は取りこぼし扱いにならない
         assert (
             s.scalar(select(DataQualityIssue).where(DataQualityIssue.issue_code == "MODEL_LIST_TRUNCATED"))
@@ -442,4 +440,99 @@ def test_next_machine_wraps_around(ctx, hall):
     summary = IngestionPipeline(ctx).collect(_adapter(), TARGET, [date(2026, 10, 25)], nav)
     assert summary.status == "succeeded", summary.errors
     assert not any("dai_prev" in e or "機種一覧" in e for e in nav.log)
-    assert sum("dai_next" in e for e in nav.log) == 3  # 0278 → 0101 → 0277（一周）
+    assert sum("dai_next" in e for e in nav.log) == 3  # 0278 → 0101 → 0277（一周）で終了
+
+
+def test_first_machine_missing_uses_known_minimum(ctx, hall, tmp_path):
+    """0001 が無い（入れ替えなど）ときは、これまでに観測した最小の台番号で検索し直す。"""
+    from tests.helpers import manual_doc, write_doc
+
+    doc = manual_doc([{"machine_number": "0101", "fields": {"total_games": 1}}])
+    IngestionPipeline(ctx).import_file("pscube", "H001", write_doc(tmp_path, "old.json", doc))
+    detail = (D / "machine_detail_0277.html").read_text(encoding="utf-8")
+    nav = FakeNavigator(detail, hall_order=["0101", "0277", "0278"])
+    summary = IngestionPipeline(ctx).collect(
+        _adapter(first_machine="0001"), TARGET, [date(2026, 10, 25)], nav
+    )
+    assert summary.status == "succeeded", summary.errors
+    assert [e for e in nav.log if e.startswith("search")] == ["search 0001", "search 0101"]
+    with ctx.session() as s:
+        saved = {
+            r.response_metadata.get("machine_number")
+            for r in s.scalars(select(RawPayload))
+            if r.response_metadata.get("page_kind") == "machine_detail"
+        }
+        assert saved == {"0101", "0277", "0278"}
+
+
+def test_next_machine_stall_recovers_by_search(ctx, hall):
+    """途中で「次台 >>」が効かなくなったら、現在の台を検索で開き直して続ける。"""
+
+    class StallOnce(FakeNavigator):
+        stalled = False
+
+        def click(
+            self, selector, ready_selector=None, has_text=None, ready_any=(), expect_machine_change=False
+        ):
+            if selector == "#dai_next" and self.machine == "0278" and not self.stalled:
+                self.stalled = True
+                self.log.append("click #dai_next (no effect)")
+                return
+            super().click(selector, ready_selector, has_text, ready_any, expect_machine_change)
+
+    detail = (D / "machine_detail_0277.html").read_text(encoding="utf-8")
+    nav = StallOnce(detail, hall_order=["0001", "0277", "0278", "0280"])
+    # 想定台数（一覧の台数合計）を 4 台にするため、1 機種 4 台の一覧にする
+    nav.pages["list"] = nav.pages["list"].replace(">3台<", ">4台<")
+    summary = IngestionPipeline(ctx).collect(
+        _adapter(first_machine="0001"), TARGET, [date(2026, 10, 25)], nav
+    )
+    assert summary.status == "succeeded", summary.errors
+    assert "search 0278" in nav.log  # 開き直した
+    with ctx.session() as s:
+        saved = {
+            r.response_metadata.get("machine_number")
+            for r in s.scalars(select(RawPayload))
+            if r.response_metadata.get("page_kind") == "machine_detail"
+        }
+        assert saved == {"0001", "0277", "0278", "0280"}
+
+
+def test_resume_starts_after_last_saved_machine(ctx, hall):
+    """--resume では、取得済みの最後の台を検索で開いて「次台 >>」から続け、取得済みの区間をたどり直さない。"""
+
+    class CrashAfter0278(FakeNavigator):
+        def click(
+            self, selector, ready_selector=None, has_text=None, ready_any=(), expect_machine_change=False
+        ):
+            if selector == "#dai_next" and self.machine == "0278":
+                raise RuntimeError("browser crashed")
+            super().click(selector, ready_selector, has_text, ready_any, expect_machine_change)
+
+        def search_machine(self, number):
+            if int(number) == 278:
+                raise RuntimeError("browser crashed")  # 復帰の検索も失敗して止まる
+            return super().search_machine(number)
+
+    detail = (D / "machine_detail_0277.html").read_text(encoding="utf-8")
+    order = ["0001", "0277", "0278", "0280", "0300"]
+    pipeline = IngestionPipeline(ctx)
+    first = pipeline.collect(
+        _adapter(first_machine="0001"), TARGET, [date(2026, 10, 25)], CrashAfter0278(detail, hall_order=order)
+    )
+    assert first.status == "partial"
+
+    nav = FakeNavigator(detail, hall_order=order)
+    resumed = pipeline.collect(
+        _adapter(first_machine="0001"), TARGET, [date(2026, 10, 25)], nav, resume_run_id=first.run_id
+    )
+    assert resumed.status == "succeeded", resumed.errors
+    assert [e for e in nav.log if e.startswith("search")] == ["search 0278"]  # 0001 からたどり直さない
+    assert resumed.counts["pages"] == 2  # 0280, 0300 だけ
+    with ctx.session() as s:
+        saved = [
+            r.response_metadata.get("machine_number")
+            for r in s.scalars(select(RawPayload))
+            if r.response_metadata.get("page_kind") == "machine_detail"
+        ]
+        assert sorted(saved) == ["0001", "0277", "0278", "0280", "0300"]

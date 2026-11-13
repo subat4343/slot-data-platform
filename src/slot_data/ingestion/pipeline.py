@@ -480,6 +480,7 @@ class IngestionPipeline:
     ) -> RunSummary:
         """画面遷移型の収集。各画面を原本保存→解析し、失敗した画面は欠損理由を記録する。"""
         done = self._completed_fingerprints(resume_run_id) if resume_run_id else set()
+        hints = self._crawl_hints(adapter.source_code, target.hall_code, resume_run_id)
         run_id = self.start_run(
             adapter.source_code,
             target.hall_code,
@@ -499,7 +500,7 @@ class IngestionPipeline:
         keys: list[ObservationKey] = []
         with log_context(job_id=run_id, source=adapter.source_code, hall=target.hall_code):
             try:
-                for step in adapter.crawl(target, business_dates, client, done):
+                for step in adapter.crawl(target, business_dates, client, done, hints=hints):
                     counts["pages"] += 1
                     fingerprint = step.request.fingerprint()
                     with log_context(
@@ -577,6 +578,53 @@ class IngestionPipeline:
                 dedup_key=f"{run_id}:{fingerprint}",
                 details={"kind": str(kind), "message": message, "url": request.url},
             )
+
+    def _crawl_hints(
+        self, source_code: str, hall_code: str, resume_run_id: uuid.UUID | None
+    ) -> dict[str, Any]:
+        """巡回の補助情報。resume_after: 再開元で解析まで済んだ台詳細のうち最大の台番号、
+        known_min_machine: これまでに観測した最小の台番号（先頭の台が無くなった場合の検索の候補）。"""
+        from slot_data.models import Source, SourceObservation
+
+        def numeric_key(value: str) -> tuple[int, str]:
+            return (int(value), value) if value.isdigit() else (10**9, value)
+
+        hints: dict[str, Any] = {}
+        with self.ctx.session() as s:
+            hall = get_hall(s, hall_code)
+            numbers = list(
+                s.scalars(
+                    select(SourceObservation.machine_number)
+                    .join(Source, Source.id == SourceObservation.source_id)
+                    .where(SourceObservation.hall_id == hall.id, Source.code == source_code)
+                    .distinct()
+                )
+            )
+            if numbers:
+                hints["known_min_machine"] = min(numbers, key=numeric_key)
+            if resume_run_id is not None:
+                succeeded = select(ParseRun.raw_payload_id).where(ParseRun.status == ParseStatus.SUCCEEDED)
+                done_machines: list[str] = []
+                current: uuid.UUID | None = resume_run_id
+                while current is not None:
+                    done_machines.extend(
+                        m
+                        for m in s.scalars(
+                            select(RawPayload.response_metadata["machine_number"].astext).where(
+                                RawPayload.collection_run_id == current,
+                                RawPayload.response_metadata["page_kind"].astext == "machine_detail",
+                                RawPayload.response_metadata["page_error"].astext.is_(None),
+                                RawPayload.id.in_(succeeded) | RawPayload.duplicate_of_id.is_not(None),
+                            )
+                        )
+                        if m
+                    )
+                    current = s.scalar(
+                        select(CollectionRun.resumed_from_id).where(CollectionRun.id == current)
+                    )
+                if done_machines:
+                    hints["resume_after"] = max(done_machines, key=numeric_key)
+        return hints
 
     def _completed_fingerprints(self, run_id: uuid.UUID) -> set[str]:
         """再開元ジョブ（とその再開元の連鎖）で原本保存まで完了した取得要求。"""

@@ -50,8 +50,15 @@ Register-ScheduledTask -TaskName $CollectName -Action $collectAction -Trigger $c
     -Description "slot-data: P's CUBE（ぱちタウン経由）を画面ありのブラウザで巡回して収集" | Out-Null
 Write-Host "registered: $CollectName (daily $At)"
 
-# 開発用 PostgreSQL をログオン時に起動
-if (Test-Path (Join-Path $Root ".devdb\pgsql\bin\pg_ctl.exe")) {
+# 開発用 PostgreSQL をログオン時に起動（Windows サービス slot-data-postgres として登録済みなら不要なので登録しない）
+$pgService = Get-Service -Name "slot-data-postgres" -ErrorAction SilentlyContinue
+if ($pgService) {
+    Write-Host "skip: $PgName (PostgreSQL は Windows サービス slot-data-postgres で起動します)"
+    if (Get-ScheduledTask -TaskName $PgName -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName $PgName -Confirm:$false
+    }
+}
+elseif (Test-Path (Join-Path $Root ".devdb\pgsql\bin\pg_ctl.exe")) {
     $pgAction = New-ScheduledTaskAction -Execute "powershell.exe" `
         -Argument ("-NoProfile -ExecutionPolicy Bypass -File `"{0}`" start" -f (Join-Path $Root "scripts\dev-postgres.ps1")) `
         -WorkingDirectory $Root

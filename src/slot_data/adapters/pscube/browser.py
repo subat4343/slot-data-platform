@@ -43,6 +43,8 @@ class Navigator(Protocol):
 
     def current_machine(self) -> str | None: ...
 
+    def search_machine(self, number: str) -> str | None: ...
+
     def exists(self, selector: str) -> bool: ...
 
     def html(self) -> str: ...
@@ -205,6 +207,35 @@ class PlaywrightNavigator:
             if cls.startswith("nc-da-"):
                 return cls.removeprefix("nc-da-")
         return None
+
+    def search_machine(self, number: str) -> str | None:
+        """画面の「台番号で探す」欄に台番号を入れて送信し、表示された台詳細の台番号を返す（開けなければ None）。
+
+        送信先の URL は直接開かず、画面の入力欄とボタンを使う。送信は画面遷移 1 回として min_interval を守る。
+        「台番号で探す」タブの切り替えは同じ画面内の表示切り替えなので間隔の対象にしない。
+        """
+        frame = self._frame()
+        tab = frame.locator("li.search-da")
+        if tab.count():
+            tab.first.click()
+        form = frame.locator("form.nc-da-search-form").first
+        form.locator("input[name=cd_dai]").fill(number)
+        self._wait_interval()
+        before = self.current_machine()
+        form.locator(".nc-da-search-btn-submit button").first.click()
+        # 台詳細に切り替わる（表示中の台番号が変わる）か、お知らせ（該当なしなど）が出るまで待つ
+        notify = frame.locator("span.notifyMessage")
+        deadline = time.monotonic() + self.timeout_ms / 1000
+        while time.monotonic() < deadline:
+            current = self.current_machine()
+            if current is not None and current != before:
+                break
+            if notify.count() and notify.first.inner_text().strip():
+                break
+            self._page.wait_for_timeout(300)
+        self._settle(None, ("text=累計ゲーム", "span.notifyMessage:has-text('error')"))
+        # 開いた台番号を返す（呼び出し側が検索した台番号と一致するかを確かめる）
+        return self.current_machine()
 
     def exists(self, selector: str) -> bool:
         return self._frame().locator(selector).count() > 0

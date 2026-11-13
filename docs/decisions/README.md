@@ -14,4 +14,5 @@
 | [0010](0010-append-only-enforcement.md) | 追記専用・不変性の DB での担保 | 採用 |
 | [0011](0011-pscube-browser-crawl.md) | P's CUBE はぱちタウン経由・画面ありのブラウザで巡回する | 採用（一部を ADR-0012 で置き換え） |
 | [0012](0012-pscube-automation-markers.md) | P's CUBE 巡回で自動操作の目印を無効化する（ADR-0011 の一部を置き換え） | 採用（ユーザー判断 2026-10-26） |
-| [0013](0013-pscube-scroll-and-next-machine.md) | P's CUBE: 機種一覧を最後までスクロールし、台詳細は「次台 >>」で辿る | 採用（ユーザー承認 2026-11-13） |
+| [0013](0013-pscube-scroll-and-next-machine.md) | P's CUBE: 機種一覧を最後までスクロールし、台詳細は「次台 >>」で辿る | 採用（台詳細の巡回順は ADR-0014 で置き換え） |
+| [0014](0014-pscube-search-first-machine.md) | P's CUBE: 台番号検索で先頭の台を開き、「次台 >>」だけで最後まで進む（ADR-0013 の一部を置き換え） | 採用（ユーザー提案 2026-11-14、検索の挙動は実機確認待ち） |
