@@ -39,7 +39,7 @@
 | MODEL_MAPPING_PENDING | info | 照合 | 機種の対応付けがレビュー待ち |
 | PARSE_FAILED | error | 解析 | 原本を解析できない。解析結果の保存で例外になった場合（details.stage = persist）は原本を未解析に戻すので、原因を直して `reparse --pending` で取り込む |
 | PARSE_RECORD_REJECTED | error | 解析 | 原本内の一部レコードを解析できない |
-| FETCH_FAILED | warning | 収集 | 取得失敗（取得不能日の欠損理由）。details.kind: access_denied（error(451)）、page_error、wrong_page（クリックしたのに期待した画面へ遷移しなかった。遷移前の画面は保存しない）、deadline（営業日の区切り前の打ち切り時刻に達した）、crawl_aborted（巡回が途中で止まった。再開コマンドを記録） |
+| FETCH_FAILED | warning | 収集 | 取得失敗（取得不能日の欠損理由）。details.kind: access_denied（error(451)）、page_error、wrong_page（クリックしたのに期待した画面へ遷移しなかった。遷移前の画面は保存しない）、search_failed（「台番号で探す」で台詳細を開けなかった）、walk_incomplete（「次台 >>」と検索で辿れた台が一覧の台数合計に届かないまま終わった。保存台数・想定台数・最後の台番号・終了理由を記録）、deadline（営業日の区切り前の打ち切り時刻に達した）、crawl_aborted（巡回が途中で止まった。再開コマンドを記録） |
 | MODEL_LIST_TRUNCATED | warning | 解析 | 機種一覧の件数が読み込みの区切り（20 件）ちょうどで、続きが読み込まれていない可能性がある |
 | RAW_MISSING | critical | 監査 | 原本ファイルが無い（参照切れ） |
 | RAW_HASH_MISMATCH | critical | 監査 | 原本ファイルのハッシュが一致しない |

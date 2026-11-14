@@ -38,6 +38,9 @@ from slot_data.adapters.pscube.parsers import (
 )
 from slot_data.config import CollectTarget
 from slot_data.domain.timeutil import utcnow
+from slot_data.observability.logging import get_logger
+
+log = get_logger(__name__)
 
 PTOWN_URL = "https://p-town.dmm.com/shops/{shop}/jackpot"
 SLOT_DATA_LINK = "a[href*='nc-v03-001.php']"
@@ -50,6 +53,7 @@ NEXT_MACHINE = (
     "#dai_next"  # 台詳細の「次台 >>」（ホール全体の台番号順。URL は変わらず画面の中身が切り替わる）
 )
 PREV_MACHINE = "#dai_prev"  # 台詳細の「<< 前台」
+MAX_JUMP_ATTEMPTS = 5  # 「次台 >>」の切れ目の続きを検索で探すときに試す台番号の数
 MAX_NEXT_RECOVERIES = 2  # 「次台 >>」が効かないときに検索で開き直す回数の上限（1 回の巡回あたり）
 DEFAULT_FIRST_MACHINE = "0001"  # 台詳細の巡回を始める台番号（options.first_machine で変更できる）
 # 機種一覧の追加読み込み（スクロール）の間隔（秒）と回数の上限。options.list_scroll_interval で変更できる
@@ -95,6 +99,15 @@ class SearchFailedError(RuntimeError):
 
     def __init__(self, numbers: str) -> None:
         super().__init__(f"could not open machine detail by search: {numbers}")
+
+
+class WalkIncompleteError(RuntimeError):
+    """「次台 >>」と検索で辿れた台が、一覧の台数合計に届かないまま終わった（取りこぼし）。"""
+
+    kind = "walk_incomplete"
+
+    def __init__(self, saved: int, expected: int, last: str | None, reason: str) -> None:
+        super().__init__(f"saved {saved} of {expected} machines; last={last}; reason={reason}")
 
 
 class DeadlineReached(RuntimeError):
@@ -172,6 +185,8 @@ class PsCubeAdapter(CrawlingAdapter):
           台番号の昇順に最後の台まで進む（1 台につき画面遷移 1 回。ADR-0014）。開けなければ前回までの最小の台番号
           （hints.known_min_machine）で検索し直し、それでも開けなければ先頭の機種の先頭の台から入る
         - 「次台 >>」が効かないときは、現在の台を検索で開き直して続ける（1 回の巡回で 2 回まで）
+        - 「次台 >>」が途中の台から先へ進まない（区画の切れ目など）ときは、これまでに観測した台番号のうち次に大きい
+          台を検索で開いて続ける（hints.known_machines）。一覧の台数合計に届かないまま終わったら walk_incomplete を記録
         - 再開（--resume）では、取得済みの最後の台（hints.resume_after）を検索で開き、そこから続ける
         - crawl_details が false のときは、従来どおり機種画面（日別 BONUS 回数）を機種ごとに開く
         - 画面の「本日」は実行時点の営業日なので、business_dates の最終日を取得日のラベルに使う
@@ -314,11 +329,13 @@ class PsCubeAdapter(CrawlingAdapter):
             if state["recoveries"] <= 0:
                 return False
             state["recoveries"] -= 1
+            log.info("next-machine did not advance at %s; reopening it by search", current)
             got = yield from open_by_search(current)
             return got is not None
 
         def walk(current: str) -> Iterator[CrawlStep]:
-            """「次台 >>」を押し続けて台詳細を保存する。終わった理由を返す。"""
+            """「次台 >>」を押し続けて台詳細を保存する。終わった理由を返す（最後に表示した台は state["last"]）。"""
+            state["last"] = current
             while len(seen) < limit:
                 if past_deadline():
                     yield deadline_step(request("machine_detail", "nc-v06-001.php", None))
@@ -329,14 +346,16 @@ class PsCubeAdapter(CrawlingAdapter):
                     nav.click(NEXT_MACHINE, ready_any=DETAIL_READY, expect_machine_change=True)
                 except Exception:
                     # 画面の状態がおかしくなった（タイムアウトなど）。現在の台を検索で開き直して続ける
+                    log.warning("next-machine click failed at %s", current, exc_info=True)
                     if (yield from recover(current)):
                         continue
                     raise
                 number = nav.current_machine()
                 if number is None or number == current:
-                    # 台が変わらない: 最後の台に達したか、「次台 >>」が効かなくなった。
-                    # まだ想定台数に届いていなければ、現在の台を検索で開き直してもう一度だけ押す
-                    if len(seen) < expected and (yield from recover(current)):
+                    # 台が変わらない: 最後の台に達したか、「次台 >>」がその台から先へ進まない（区画の切れ目など）。
+                    # まだ想定台数に届いていなければ、現在の台を検索で開き直して一度だけ押し直す
+                    first_stall = state["recoveries"] == MAX_NEXT_RECOVERIES
+                    if len(seen) < expected and first_stall and (yield from recover(current)):
                         continue
                     if number is None:
                         yield CrawlStep(
@@ -353,7 +372,56 @@ class PsCubeAdapter(CrawlingAdapter):
                 if state["blocked"]:
                     return "blocked"
                 current = number
+                state["last"] = current
             return "limit"
+
+        def jump_forward(after: str) -> Iterator[CrawlStep]:
+            """「次台 >>」で進めなくなった台の続きを、台番号検索で開く。開けた台番号を返す（無ければ None）。
+
+            候補は、これまでに観測した台番号のうち after より大きいもの（小さい順）。観測が無い区間は after+1 から
+            数件だけ試す。存在しない台番号の検索は画面が変わらないだけなので、候補を順に試す。
+            """
+            seen_numbers = {int(n) for n in seen if n.isdigit()}
+            known = [n for n in (hints or {}).get("known_machines", []) if n.isdigit()]
+            candidates = sorted({int(n) for n in known if int(n) > int(after)} - seen_numbers)
+            if not candidates and after.isdigit():
+                candidates = [int(after) + i for i in range(1, MAX_JUMP_ATTEMPTS + 1)]
+            for value in candidates[:MAX_JUMP_ATTEMPTS]:
+                number = search_number(str(value))
+                got = yield from open_by_search(number)
+                if got is not None:
+                    log.info("next-machine stopped at %s; continued from %s by search", after, got)
+                    return got
+                if past_deadline():
+                    return None
+            log.info("next-machine stopped at %s; no following machine could be opened by search", after)
+            return None
+
+        def walk_to_end(current: str) -> Iterator[CrawlStep]:
+            """walk を続け、「次台 >>」の切れ目では検索で続きを開いて最後まで進む。最後に取りこぼしを記録する。"""
+            while True:
+                reason = yield from walk(current)
+                last = state["last"]
+                log.info(
+                    "walk finished: reason=%s last=%s saved=%d expected=%d", reason, last, len(seen), expected
+                )
+                if reason != "end" or len(seen) >= expected:
+                    break
+                nxt = yield from jump_forward(last)
+                if nxt is None:
+                    break
+                seen.add(nxt)
+                yield from save_detail(nxt)
+                if state["blocked"]:
+                    return
+                current = nxt
+            if reason in ("end", "stuck", "limit") and len(seen) < expected:
+                # 想定台数（一覧の台数合計）に届かないまま終わった。取りこぼしとして記録する（run は partial になる）
+                yield CrawlStep(
+                    request("machine_detail", "walk", state["last"]),
+                    None,
+                    failure=WalkIncompleteError(len(seen), expected, state["last"], reason),
+                )
 
         resume_after = (hints or {}).get("resume_after")
         if resume_after:
@@ -367,7 +435,7 @@ class PsCubeAdapter(CrawlingAdapter):
                 )
                 return
             seen.add(current)
-            yield from walk(current)
+            yield from walk_to_end(current)
             return
 
         current = None
@@ -393,4 +461,4 @@ class PsCubeAdapter(CrawlingAdapter):
         yield from save_detail(current)
         if state["blocked"]:
             return
-        yield from walk(current)
+        yield from walk_to_end(current)

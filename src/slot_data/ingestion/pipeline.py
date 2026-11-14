@@ -602,6 +602,17 @@ class IngestionPipeline:
             )
             if numbers:
                 hints["known_min_machine"] = min(numbers, key=numeric_key)
+            # 「次台 >>」の切れ目の続きを探す候補（取得元を問わず、この店舗で観測した台番号）
+            hints["known_machines"] = sorted(
+                set(
+                    s.scalars(
+                        select(SourceObservation.machine_number)
+                        .where(SourceObservation.hall_id == hall.id)
+                        .distinct()
+                    )
+                ),
+                key=numeric_key,
+            )
             if resume_run_id is not None:
                 succeeded = select(ParseRun.raw_payload_id).where(ParseRun.status == ParseStatus.SUCCEEDED)
                 done_machines: list[str] = []

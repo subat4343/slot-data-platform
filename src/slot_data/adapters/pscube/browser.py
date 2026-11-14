@@ -43,7 +43,7 @@ class Navigator(Protocol):
 
     def current_machine(self) -> str | None: ...
 
-    def search_machine(self, number: str) -> str | None: ...
+    def search_machine(self, number: str, timeout_s: float = 20.0) -> str | None: ...
 
     def exists(self, selector: str) -> bool: ...
 
@@ -208,7 +208,7 @@ class PlaywrightNavigator:
                 return cls.removeprefix("nc-da-")
         return None
 
-    def search_machine(self, number: str) -> str | None:
+    def search_machine(self, number: str, timeout_s: float = 20.0) -> str | None:
         """画面の「台番号で探す」欄に台番号を入れて送信し、表示された台詳細の台番号を返す（開けなければ None）。
 
         送信先の URL は直接開かず、画面の入力欄とボタンを使う。送信は画面遷移 1 回として min_interval を守る。
@@ -225,7 +225,8 @@ class PlaywrightNavigator:
         form.locator(".nc-da-search-btn-submit button").first.click()
         # 台詳細に切り替わる（表示中の台番号が変わる）か、お知らせ（該当なしなど）が出るまで待つ
         notify = frame.locator("span.notifyMessage")
-        deadline = time.monotonic() + self.timeout_ms / 1000
+        # 存在しない台番号では画面が変わらない（お知らせも出ない）ため、短めの上限で打ち切る
+        deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             current = self.current_machine()
             if current is not None and current != before:

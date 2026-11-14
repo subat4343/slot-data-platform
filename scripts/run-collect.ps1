@@ -54,8 +54,10 @@ Write-Log "start source=$Source hall=$Hall date=$Date"
 
 # 開発用 PostgreSQL（scripts/dev-postgres.ps1 で導入した場合）が止まっていれば起動する
 $PgCtl = Join-Path $Root ".devdb\pgsql\bin\pg_ctl.exe"
+$PgReady = Join-Path $Root ".devdb\pgsql\bin\pg_isready.exe"
 if (Test-Path $PgCtl) {
-    $pgStatus = Invoke-Native "pg-status" $PgCtl @("-D", (Join-Path $Root ".devdb\data"), "status") "Default"
+    # 接続できるかで判断する（Windows サービスで動かしている場合、pg_ctl status は「動作していない」と出ることがある）
+    $pgStatus = Invoke-Native "pg-ready" $PgReady @("-h", "localhost", "-p", "55432") "Default"
     if ($pgStatus -ne 0) {
         Write-Log "starting local PostgreSQL (server log: .devdb\pg.log)"
         # 起動したサーバーがリダイレクト先のファイルを開いたまま引き継ぐため、出力はリダイレクトしない

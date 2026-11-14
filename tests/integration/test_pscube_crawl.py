@@ -43,6 +43,7 @@ class FakeNavigator:
         hall_order: list[str] | None = None,
         wrap: bool = False,
         full_list: str | None = None,
+        stop_at: set[str] | None = None,
     ) -> None:
         self.pages = {
             "list": _single_model_list(),
@@ -52,6 +53,7 @@ class FakeNavigator:
         self.hall_order = hall_order or ["0277", "0278", "0280"]
         self.wrap = wrap
         self.full_list = full_list
+        self.stop_at = stop_at or set()  # 「次台 >>」を押しても進まない台
         self.current = "top"
         self.machine = None
         self.log: list[str] = []
@@ -69,6 +71,8 @@ class FakeNavigator:
         elif "btn-dai" in selector:
             self.current = "detail"
             self.machine = selector.split("cd_dai=")[-1].rstrip("']")
+        elif selector == "#dai_next" and self.machine in self.stop_at:
+            pass
         elif selector in ("#dai_next", "#dai_prev"):
             i = self.hall_order.index(self.machine) + (1 if selector == "#dai_next" else -1)
             if 0 <= i < len(self.hall_order):
@@ -405,11 +409,21 @@ def test_full_traversal_with_next_machine(ctx, hall):
     summary = IngestionPipeline(ctx).collect(
         _adapter(first_machine="0001"), TARGET, [date(2026, 10, 25)], nav
     )
-    assert summary.status == "succeeded", summary.errors
-    # 検索で 0001 を開き、「次台 >>」だけで最後の台（0280）まで進む。機種画面・前台・機種一覧へは戻らない
-    # 0001 を検索で開き、「次台 >>」で 0280 まで進む。一覧の台数合計（80 台）に届かないまま端で止まったので、
-    # 「次台 >>」が効かなくなった可能性を考えて 0280 を検索で開き直して押し直す（上限 2 回）
-    assert [e for e in nav.log if e.startswith("search")] == ["search 0001", "search 0280", "search 0280"]
+    # 検索で 0001 を開き、「次台 >>」だけで 0280 まで進む。機種画面・前台・機種一覧へは戻らない。
+    # 一覧の台数合計（78 台）に届かないまま進めなくなったので、0280 を検索で開き直して 1 回押し直し、
+    # 続きの台（観測が無いので 0281〜0285）を検索で探す。見つからなければ取りこぼし（walk_incomplete）として
+    # 記録し、run は partial になる
+    assert summary.status == "partial"
+    assert [e["kind"] for e in summary.errors] == ["walk_incomplete"]
+    assert [e for e in nav.log if e.startswith("search")] == [
+        "search 0001",
+        "search 0280",
+        "search 0281",
+        "search 0282",
+        "search 0283",
+        "search 0284",
+        "search 0285",
+    ]
     assert not any("btn-dai" in e or "dai_prev" in e or "機種一覧" in e for e in nav.log)
     with ctx.session() as s:
         details = [
@@ -536,3 +550,44 @@ def test_resume_starts_after_last_saved_machine(ctx, hall):
             if r.response_metadata.get("page_kind") == "machine_detail"
         ]
         assert sorted(saved) == ["0001", "0277", "0278", "0280", "0300"]
+
+
+def test_next_machine_gap_continues_by_search(ctx, hall, tmp_path):
+    """「次台 >>」が途中の台（0186）から先へ進まないとき、観測済みの次の台番号を検索で開いて最後まで進む。"""
+    from tests.helpers import manual_doc, write_doc
+
+    # 前回までに 0236・0237 を観測している（続きの候補になる）
+    doc = manual_doc([{"machine_number": n, "fields": {"total_games": 1}} for n in ("0236", "0237")])
+    IngestionPipeline(ctx).import_file("pscube", "H001", write_doc(tmp_path, "old.json", doc))
+
+    detail = (D / "machine_detail_0277.html").read_text(encoding="utf-8")
+    nav = FakeNavigator(detail, hall_order=["0001", "0185", "0186", "0236", "0237"], stop_at={"0186"})
+    nav.pages["list"] = nav.pages["list"].replace(">3台<", ">5台<")  # 一覧の台数合計 = 5 台
+    summary = IngestionPipeline(ctx).collect(
+        _adapter(first_machine="0001"), TARGET, [date(2026, 10, 25)], nav
+    )
+    assert summary.status == "succeeded", summary.errors
+    # 0186 で進まない → 0186 を開き直して押し直す → それでも進まないので 0236 を検索で開いて続ける
+    assert [e for e in nav.log if e.startswith("search")] == ["search 0001", "search 0186", "search 0236"]
+    with ctx.session() as s:
+        saved = sorted(
+            r.response_metadata.get("machine_number")
+            for r in s.scalars(select(RawPayload))
+            if r.response_metadata.get("page_kind") == "machine_detail"
+        )
+        assert saved == ["0001", "0185", "0186", "0236", "0237"]
+        assert s.scalar(select(DataQualityIssue).where(DataQualityIssue.issue_code == "FETCH_FAILED")) is None
+
+
+def test_walk_incomplete_is_recorded(ctx, hall):
+    """続きを開けないまま想定台数に届かなかったら、保存台数・想定台数・最後の台番号を記録する。"""
+    detail = (D / "machine_detail_0277.html").read_text(encoding="utf-8")
+    nav = FakeNavigator(detail, hall_order=["0001", "0002"], stop_at={"0002"})
+    summary = IngestionPipeline(ctx).collect(
+        _adapter(first_machine="0001"), TARGET, [date(2026, 10, 25)], nav
+    )
+    assert summary.status == "partial"
+    with ctx.session() as s:
+        issue = s.scalar(select(DataQualityIssue).where(DataQualityIssue.issue_code == "FETCH_FAILED"))
+        assert issue.details["kind"] == "walk_incomplete"
+        assert "saved 2 of 3 machines; last=0002" in issue.details["message"]
